@@ -34,7 +34,7 @@ public static class Ui
     /// <summary>Tone of the soft status pill (.sdc-status ok|run|err|warn|neutral).</summary>
     public static string StatusTone(string? status) => status switch
     {
-        "Succeeded" or Services.CheckStatus.Ok or "Sent" => "ok",
+        "Succeeded" or "Passed" or Services.CheckStatus.Ok or "Sent" => "ok",
         "Running" => "run",
         "Failed" or "CleanupPending" or Services.CheckStatus.Missing or Services.CheckStatus.Error => "err",
         "PartiallyFailed" or "Abandoned" or Services.CheckStatus.Excess or Services.CheckStatus.Warning => "warn",

@@ -1,13 +1,14 @@
 @page "/help"
 @attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject IJSRuntime JS
 
-<PageTitle>Help – SqlHarbor</PageTitle>
+<PageTitle>@(tr ? "Yardım" : "Help") – SqlHarbor</PageTitle>
 
 <div class="row">
     <div class="col-lg-3 d-none d-lg-block">
         <nav class="help-toc card"><div class="card-body">
-            <div class="section-title mb-2">Contents</div>
-            @foreach (var (id, title) in Toc)
+            <div class="section-title mb-2">@(tr ? "İçindekiler" : "Contents")</div>
+            @foreach (var (id, title) in tr ? TocTr : Toc)
             {
                 <a href="/help#@id">@title</a>
             }
@@ -15,7 +16,20 @@
     </div>
 
     <div class="col-lg-9 help-content">
-        <h1 class="h4 mb-3">Help</h1>
+        <div class="d-flex align-items-center mb-3">
+            <h1 class="h4 mb-0 me-auto">@(tr ? "Yardım" : "Help")</h1>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Language">
+                <button type="button" class="btn @(tr ? "btn-outline-secondary" : "btn-secondary")" @onclick='() => SetLanguageAsync("en")'>English</button>
+                <button type="button" class="btn @(tr ? "btn-secondary" : "btn-outline-secondary")" @onclick='() => SetLanguageAsync("tr")'>Türkçe</button>
+            </div>
+        </div>
+
+        @if (tr)
+        {
+            <HelpTr />
+        }
+        else
+        {
 
         <section id="overview">
             <h2>Overview</h2>
@@ -294,6 +308,57 @@
             </ul>
         </section>
 
+        <section id="quality">
+            <h2>Data quality checks</h2>
+            <p>Section <i>5 · Data quality</i> of an extract job holds checks that run right after every successful load, in the Worker that loaded it.
+               Results are shown on the job, on the <a href="/quality">Data quality</a> page and as a <i>quality</i> badge in the Run history.</p>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Check</th><th>Passes when</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Minimum rows</b></td><td>the load read at least N rows (catches empty or truncated loads).</td></tr>
+                    <tr><td><b>Row count change</b></td><td>the rows read are within ±N % of the average of the last 10 successful loads (needs 3 earlier loads).</td></tr>
+                    <tr><td><b>Row count matches the source</b></td><td>a second count of the source table (same filter) matches the rows written by this load – for Merge, all rows of the target –
+                        within the tolerance. Only for table/view sources, not for Incremental jobs.</td></tr>
+                    <tr><td><b>NULL share</b></td><td>the column has at most N % NULL values, in this load or in all rows of the job.</td></tr>
+                    <tr><td><b>Duplicate keys</b></td><td>at most N key values (one or more columns) occur more than once, in this load or in all rows.</td></tr>
+                    <tr><td><b>Custom SQL</b></td><td>the SQL returns one number that satisfies the comparison, e.g. <code>SELECT COUNT(*) FROM {Table} WHERE _LoadId = @@LoadId AND Amount &lt; 0</code> must be <code>= 0</code>.
+                        <code>{Table}</code> is the target table; <code>@@LoadId</code> and <code>@@ExtractJobId</code> are parameters. It runs as the read-only export reader, so a check can never change data.</td></tr>
+                </tbody>
+            </table>
+            <ul>
+                <li><b>Severity:</b> a broken <i>Warning</i> check marks the load's quality as Warning; a broken <i>Error</i> check (or a check that cannot run) marks it as Failed.</li>
+                <li>A failed quality check never undoes the load. But jobs that <a href="/help#dependencies">run after</a> this job wait until the job's <b>latest</b> load passes (an earlier good load does not count: the table now holds the failed load's data), and the load does not count as "good" for freshness.</li>
+                <li><b>Alerts:</b> <i>QualityFailed</i> and <i>QualityWarning</i> list the broken checks; they go to the job's Notify addresses and to channels that subscribe to them
+                    (new channels do by default for QualityFailed; tick them on existing channels).</li>
+                <li><b>Freshness:</b> "Alert when there is no good load for N hours" sends one <i>Stale</i> alert per stale period – useful for jobs triggered by other jobs, which have no schedule to miss.</li>
+                <li>Results are kept as long as the run history (Settings).</li>
+            </ul>
+        </section>
+
+        <section id="consistency">
+            <h2>Integrity and consistent reads</h2>
+            <p>"What is in the source arrives in the CSV" is checked in two places that do not depend on the source standing still:</p>
+            <ul>
+                <li><b>Every extract</b> (always on): the rows read from the source are counted while streaming and compared with the rows that arrived in the target
+                    (this load, the rebuild table or the merge staging table). A difference fails the run and the load is rolled back.</li>
+                <li><b>Every export</b> (always on): after writing, the CSV or Parquet files are read again and their rows counted (CSV records RFC 4180-aware, so line breaks
+                    inside quoted values do not count twice) and compared with the rows read from the DWH; nothing is uploaded on a difference. The upload then verifies each object's size.</li>
+            </ul>
+            <h3>Consistent snapshot</h3>
+            <p>A busy source changes while it is being read. <b>Read a consistent snapshot</b> (job section <i>1 · Source</i>) runs the read inside a SNAPSHOT isolation transaction:
+               the job copies exactly the rows that existed at one point in time – none skipped, none twice, no uncommitted data – without blocking the source.
+               <code>WITH (NOLOCK)</code> is the opposite: on a busy table it can skip rows or read them twice (page splits) and it reads uncommitted data; it is ignored when the snapshot option is on.</p>
+            <ul>
+                <li>The DBA enables it once per source database: <code>ALTER DATABASE [ERP] SET ALLOW_SNAPSHOT_ISOLATION ON;</code> (row versions in tempdb while transactions run).
+                    The job form shows whether it is allowed; a job that needs it but cannot use it fails with that command in the message.</li>
+                <li>Readable Availability Group secondaries always read with row versioning.</li>
+            </ul>
+            <h3>Source count check on a changing source</h3>
+            <p>The <a href="/help#quality">Row count matches the source</a> check counts the source again after the load. New rows written in between would make the counts differ.
+               Give it a <b>cutoff column</b> – an increasing ID (identity) or an insert time – and only source rows up to the highest value that was loaded are counted.
+               Rows deleted in the source after the read still show as a difference; use a small tolerance for such tables, or rely on the integrity checks above.</p>
+        </section>
+
         <section id="servers">
             <h2>Servers and service accounts</h2>
             <ul>
@@ -489,18 +554,56 @@
                 <li><b>Jobs never start</b> – no Worker is running or it does not listen to the job's queue (see Status).</li>
             </ul>
         </section>
+        }
     </div>
 </div>
 
 @code {
+    private bool tr;
+    private bool scrollPending;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var lang = await JS.InvokeAsync<string>("sdcHelp.getLanguage");
+            if (lang == "tr") { tr = true; scrollPending = true; StateHasChanged(); }
+        }
+        else if (scrollPending)
+        {
+            scrollPending = false;
+            await JS.InvokeVoidAsync("sdcHelp.scrollToHash");
+        }
+    }
+
+    private async Task SetLanguageAsync(string lang)
+    {
+        tr = lang == "tr";
+        scrollPending = true;
+        await JS.InvokeVoidAsync("sdcHelp.setLanguage", lang);
+    }
+
     private static readonly (string Id, string Title)[] Toc =
     [
         ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
         ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
-        ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
+        ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
+    ];
+
+    private static readonly (string Id, string Title)[] TocTr =
+    [
+        ("overview", "Genel bakış"), ("quick-start", "Hızlı başlangıç"), ("ornekler", "Adım adım örnekler"), ("sss", "Sık sorulan sorular"),
+        ("architecture", "Nasıl çalışır: Web ve Worker"),
+        ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("extract-target", "Hedef tablo ve şema kuralı"),
+        ("load-modes", "Yükleme modları"), ("partitioning", "Günlük bölümleme"), ("retention", "Saklama süresi (retention)"),
+        ("export", "GCS export'ları"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
+        ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"),
+        ("servers", "Sunucular ve servis hesapları"), ("servers-system", "Sistem veritabanları"),
+        ("settings", "Ayarlar: saklama ve temizlik"), ("https", "HTTPS sertifikası"), ("installation", "Kurulum"), ("alerts", "Alarmlar"), ("masking", "Veri koruma (maskeleme)"),
+        ("permission-check", "İzin kontrolü"), ("roles", "Roller ve yetkiler"), ("hangfire", "Hangfire paneli"), ("troubleshooting", "Durumlar ve sorun giderme")
     ];
 }

@@ -1,0 +1,109 @@
+@page "/quality"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@using SqlDataCollector.Quality
+@inject MetadataRepository Repo
+
+<PageTitle>Data quality</PageTitle>
+
+<div class="d-flex align-items-center mb-3">
+    <h1 class="h4 mb-0 me-auto">Data quality <HelpLink Topic="quality" Title="Data quality checks" /></h1>
+    <div class="form-check form-switch me-3 mb-0"><input class="form-check-input" type="checkbox" id="onlyProblems" @bind="onlyProblems" /><label class="form-check-label small" for="onlyProblems">Problems only</label></div>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync">Refresh</button>
+</div>
+
+<div class="sdc-kpis">
+    <div class="sdc-kpi neutral">
+        <div class="sdc-kpi-label">Active checks</div>
+        <div class="sdc-kpi-value">@checks.Count(c => c.IsActive)</div>
+        <div class="sdc-kpi-sub">on @checks.Where(c => c.IsActive).Select(c => c.ExtractJobId).Distinct().Count() job(s)</div>
+    </div>
+    <div class="sdc-kpi @(Count(QualityStatus.Failed) + Count(QualityStatus.Error) > 0 ? "err" : "ok")">
+        <div class="sdc-kpi-label">Failing now</div>
+        <div class="sdc-kpi-value">@(Count(QualityStatus.Failed) + Count(QualityStatus.Error))</div>
+        <div class="sdc-kpi-sub">latest result Failed or Error</div>
+    </div>
+    <div class="sdc-kpi @(Count(QualityStatus.Warning) > 0 ? "warn" : "ok")">
+        <div class="sdc-kpi-label">Warnings</div>
+        <div class="sdc-kpi-value">@Count(QualityStatus.Warning)</div>
+        <div class="sdc-kpi-sub">latest result Warning</div>
+    </div>
+    <div class="sdc-kpi ok">
+        <div class="sdc-kpi-label">Passing</div>
+        <div class="sdc-kpi-value">@Count(QualityStatus.Passed)</div>
+        <div class="sdc-kpi-sub">latest result Passed</div>
+    </div>
+    <div class="sdc-kpi @(stale.Count > 0 ? "warn" : "ok")">
+        <div class="sdc-kpi-label">Stale jobs</div>
+        <div class="sdc-kpi-value">@stale.Count</div>
+        <div class="sdc-kpi-sub">older than their freshness limit</div>
+    </div>
+</div>
+
+@if (stale.Count > 0)
+{
+    <div class="section-title mb-2 mt-4">Stale data</div>
+    <table class="table table-sm table-hover bg-white">
+        <thead class="table-light"><tr><th>Job</th><th>Freshness limit</th><th>Last good load</th></tr></thead>
+        <tbody>
+            @foreach (var s in stale)
+            {
+                <tr>
+                    <td><a href="/extract/@s.Job.ExtractJobId">@s.Job.Name</a></td>
+                    <td>@s.Job.FreshnessHours h</td>
+                    <td>@(s.Last is null ? "never" : $"{Ui.Local(s.Last)} ({(DateTime.UtcNow - s.Last.Value).TotalHours:N1} h ago)")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<div class="section-title mb-2 mt-4">Checks – latest result</div>
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light"><tr><th>Job</th><th>Check</th><th>Severity</th><th>Result</th><th>Checked</th><th>Details</th></tr></thead>
+    <tbody>
+        @if (!Rows.Any()) { <tr><td colspan="6" class="text-muted small">@(checks.Count == 0 ? "No checks defined yet – add them in section 5 of an extract job." : "Nothing to show.")</td></tr> }
+        @foreach (var (check, last) in Rows)
+        {
+            <tr class="@(check.IsActive ? "" : "text-muted")">
+                <td><a href="/extract/@check.ExtractJobId">@JobName(check.ExtractJobId)</a></td>
+                <td class="small">@QualityRules.Describe(check)</td>
+                <td class="small">@check.Severity</td>
+                <td>@if (last is null) { <span class="text-muted small">not run yet</span> } else { <StatusBadge Status="@last.Status" /> }</td>
+                <td class="small text-nowrap">@(last is null ? "" : Ui.Local(last.CheckedAtUtc))</td>
+                <td class="small">@last?.Message</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<QualityCheckDef> checks = [];
+    private Dictionary<int, QualityResultRow> latest = [];
+    private Dictionary<int, string> jobNames = [];
+    private List<(ExtractJobDef Job, DateTime? Last)> stale = [];
+    private bool onlyProblems;
+
+    private int Count(string status) => checks.Count(c => c.IsActive && latest.TryGetValue(c.QualityCheckId, out var r) && r.Status == status);
+    private string JobName(int id) => jobNames.GetValueOrDefault(id, $"#{id}");
+
+    private IEnumerable<(QualityCheckDef Check, QualityResultRow? Last)> Rows => checks
+        .Select(c => (Check: c, Last: latest.GetValueOrDefault(c.QualityCheckId)))
+        .Where(x => !onlyProblems || x.Last is { Status: not QualityStatus.Passed })
+        .OrderBy(x => x.Last?.Status switch { QualityStatus.Failed or QualityStatus.Error => 0, QualityStatus.Warning => 1, null => 2, _ => 3 })
+        .ThenBy(x => JobName(x.Check.ExtractJobId));
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        checks = (await Repo.GetQualityChecksAsync()).ToList();
+        latest = (await Repo.GetLatestQualityResultsAsync()).ToDictionary(r => r.QualityCheckId);
+        var jobs = await Repo.GetExtractJobsAsync();
+        jobNames = jobs.ToDictionary(j => j.ExtractJobId, j => j.Name);
+        var good = await Repo.GetLastGoodLoadsAsync();
+        stale = jobs.Where(j => j.IsActive && j.FreshnessHours is > 0)
+            .Select(j => (Job: j, Last: good.TryGetValue(j.ExtractJobId, out var g) ? g.FinishedAtUtc : (DateTime?)null))
+            .Where(x => x.Last is null || DateTime.UtcNow - x.Last.Value > TimeSpan.FromHours(x.Job.FreshnessHours!.Value))
+            .ToList();
+    }
+}

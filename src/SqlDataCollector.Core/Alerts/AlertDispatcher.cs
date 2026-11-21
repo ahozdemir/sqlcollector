@@ -41,6 +41,7 @@ public sealed class AlertDispatcher(
         var events = new List<AlertEvent>();
         events.AddRange(await RunEventsAsync(since));
         events.AddRange(await MissedEventsAsync(now, baseline, TimeSpan.FromMinutes(cfg.MissedGraceMinutes)));
+        events.AddRange(await StaleEventsAsync(now, baseline));
         events.AddRange(NoServerEvents(now, cfg.ThrottleMinutes));
         if (CertificateEvent(now) is { } certEvent) events.Add(certEvent);
         if (events.Count == 0) return 0;
@@ -121,6 +122,39 @@ public sealed class AlertDispatcher(
             else if (r.Status == "Succeeded" && r.PrevStatus is not null && AlertEvents.Problems.Contains(r.PrevStatus))
                 list.Add(new AlertEvent(AlertEvents.Recovered, r.Kind, r.JobId, r.JobName, r.RunId, at, r.NotifyEmails, r.StartedAtUtc, r.FinishedAtUtc,
                     r.Rows, null, r.HostName, r.TriggeredBy, Detail: $"Previous run: {r.PrevStatus}."));
+
+            // the load succeeded but its data quality checks did not pass
+            if (r.Kind == "Extract" && r.Status == "Succeeded" && r.QualityStatus is Quality.QualityStatus.Failed or Quality.QualityStatus.Warning)
+            {
+                var problems = (await repo.GetQualityResultsForRunAsync(r.RunId)).Where(x => x.Status != Quality.QualityStatus.Passed)
+                    .Select(x => $"{x.CheckType}{(string.IsNullOrEmpty(x.ColumnName) ? "" : " " + x.ColumnName)} ({x.Status}): {x.Message}");
+                list.Add(new AlertEvent(r.QualityStatus == Quality.QualityStatus.Failed ? AlertEvents.QualityFailed : AlertEvents.QualityWarning,
+                    r.Kind, r.JobId, r.JobName, r.RunId, at, r.NotifyEmails, r.StartedAtUtc, r.FinishedAtUtc, r.Rows, null, r.HostName, r.TriggeredBy,
+                    Detail: string.Join(Environment.NewLine, problems) + (r.QualityStatus == Quality.QualityStatus.Failed ? Environment.NewLine + "Jobs that run after this one wait for a load that passes." : "")));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>Extract jobs with a freshness limit whose last good load (succeeded, quality not failed) is older than the limit.</summary>
+    private async Task<IReadOnlyList<AlertEvent>> StaleEventsAsync(DateTime now, DateTime baseline)
+    {
+        var jobs = (await repo.GetExtractJobsAsync()).Where(j => j.IsActive && j.FreshnessHours is > 0).ToList();
+        if (jobs.Count == 0) return [];
+        var last = await repo.GetLastGoodLoadsAsync();
+        var list = new List<AlertEvent>();
+        foreach (var j in jobs)
+        {
+            var hasLoad = last.TryGetValue(j.ExtractJobId, out var good);
+            // never loaded: counted from the later of the job's last change and the start of alerting
+            var reference = hasLoad ? good.FinishedAtUtc : (j.ModifiedAtUtc > baseline ? j.ModifiedAtUtc : baseline);
+            var limit = TimeSpan.FromHours(j.FreshnessHours!.Value);
+            if (now - reference <= limit) continue;
+            // one alert per stale period: the key is the last good load
+            list.Add(new AlertEvent(AlertEvents.Stale, "Extract", j.ExtractJobId, j.Name, hasLoad ? good.LoadRunId : 0, now, j.NotifyEmails,
+                Detail: hasLoad
+                    ? $"Last good load {reference:yyyy-MM-dd HH:mm} UTC ({(now - reference).TotalHours:N1} h ago); expected at least every {j.FreshnessHours} h."
+                    : $"No good load yet; expected at least every {j.FreshnessHours} h."));
         }
         return list;
     }

@@ -27,7 +27,7 @@
                 <td class="mono">@r.RunId</td>
                 <td>@r.Kind</td>
                 <td><a href="@(r.Kind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")" @onclick:stopPropagation>@r.JobName</a></td>
-                <td><StatusBadge Status="@r.Status" /></td>
+                <td class="text-nowrap"><StatusBadge Status="@r.Status" /> @if (r.QualityStatus is not null) { <a href="@($"/extract/{r.JobId}")" title="Data quality of this load"><span class="sdc-status @(r.QualityStatus == "Passed" ? "ok" : r.QualityStatus == "Warning" ? "warn" : "err")">quality: @r.QualityStatus.ToLowerInvariant()</span></a> }</td>
                 <td>@Ui.Local(r.StartedAtUtc)</td>
                 <td>@Ui.Duration(r.StartedAtUtc, r.FinishedAtUtc)</td>
                 <td class="text-end">@r.Rows?.ToString("N0")</td>

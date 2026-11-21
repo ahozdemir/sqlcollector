@@ -42,16 +42,19 @@ public static class AlertEvents
     public const string Missed = "Missed";
     public const string NoServer = "NoServer";
     public const string CertExpiring = "CertExpiring";
+    public const string QualityFailed = "QualityFailed";
+    public const string QualityWarning = "QualityWarning";
+    public const string Stale = "Stale";
 
-    public static readonly string[] All = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed, NoServer, CertExpiring];
+    public static readonly string[] All = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed, QualityFailed, QualityWarning, Stale, NoServer, CertExpiring];
     public static readonly string[] Problems = [Failed, PartiallyFailed, Abandoned, CleanupPending];
-    public const string DefaultChannelStatuses = "Failed,PartiallyFailed,Abandoned,CleanupPending,Missed,NoServer,CertExpiring";
+    public const string DefaultChannelStatuses = "Failed,PartiallyFailed,Abandoned,CleanupPending,Missed,QualityFailed,Stale,NoServer,CertExpiring";
 
     /// <summary>The HTTPS certificate is reported this many days before it expires (once a day).</summary>
     public const int CertWarningDays = 30;
 
     /// <summary>Events sent to a job's own NotifyEmails.</summary>
-    public static readonly string[] JobRecipients = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed];
+    public static readonly string[] JobRecipients = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed, QualityFailed, QualityWarning, Stale];
 
     public static string Describe(string e) => e switch
     {
@@ -60,6 +63,9 @@ public static class AlertEvents
         Missed => "did not run as scheduled",
         NoServer => "no Hangfire server listening",
         CertExpiring => "HTTPS certificate expires soon",
+        QualityFailed => "data quality checks failed",
+        QualityWarning => "data quality warning",
+        Stale => "no fresh data",
         _ => e.ToLowerInvariant()
     };
 }
@@ -117,6 +123,7 @@ public sealed class FinishedRunRow
     public string? ErrorMessage { get; set; }
     public string? HostName { get; set; }
     public string? TriggeredBy { get; set; }
+    public string? QualityStatus { get; set; }
 }
 
 /// <summary>Something to alert about. Key = (EventType, JobKind, JobId, RunId).</summary>

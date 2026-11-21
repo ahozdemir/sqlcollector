@@ -149,7 +149,9 @@ a { text-decoration: none; }
 .help-toc { position: sticky; top: 72px; font-size: .85rem; }
 .help-toc a { display: block; padding: .2rem 0; color: #495057; text-decoration: none; }
 .help-toc a:hover { color: var(--sdc-primary); }
-.help-content section { scroll-margin-top: 72px; margin-bottom: 2rem; }
+.help-content section { margin-bottom: 2rem; }
+/* every anchor target (sections and sub-topics such as #merge) stays below the fixed top bar */
+.help-content [id] { scroll-margin-top: 72px; }
 .help-content h2 { font-size: 1.15rem; border-bottom: 1px solid var(--sdc-border); padding-bottom: .35rem; margin-bottom: .75rem; }
 .help-content h3 { font-size: .98rem; margin-top: 1rem; }
 .help-content table { font-size: .85rem; }

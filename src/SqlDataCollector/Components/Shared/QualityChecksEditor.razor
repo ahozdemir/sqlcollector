@@ -1,0 +1,228 @@
+@* Data quality checks of an extract job (etl.QualityCheck) and the freshness limit (saved with the job). *@
+@using SqlDataCollector.Quality
+@inject MetadataRepository Repo
+@inject AccessService Access
+
+<div class="row g-2 align-items-end mb-2">
+    <div class="col-md-5">
+        <label class="form-label small">Alert when there is no good load for (hours) <HelpLink Topic="quality" Title="Data quality" /></label>
+        <input type="number" min="1" class="form-control form-control-sm" @bind="Job.FreshnessHours" placeholder="no freshness alert" disabled="@(!CanEdit)" />
+    </div>
+    <div class="col-md-7 small text-muted">Saved with the job. "Good" = succeeded and no failed quality check. Sent as a <i>Stale</i> alert.</div>
+</div>
+
+@if (Job.ExtractJobId == 0)
+{
+    <div class="small text-muted">Save the job first, then add checks that run after every load.</div>
+}
+else
+{
+    @if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-1 px-2 small mb-2" style="white-space: pre-line">@error</div> }
+    <table class="table table-sm bg-white mb-2">
+        <thead class="table-light"><tr><th>Check</th><th>Severity</th><th>Last result</th><th></th></tr></thead>
+        <tbody>
+            @if (checks.Count == 0) { <tr><td colspan="4" class="small text-muted">No checks yet. Typical: at least 1 row, row count matches the source, key columns unique.</td></tr> }
+            @foreach (var q in checks)
+            {
+                var last = results.FirstOrDefault(r => r.QualityCheckId == q.QualityCheckId);
+                <tr class="@(q.IsActive ? "" : "text-muted")">
+                    <td class="small">@QualityRules.Describe(q) @if (!q.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                    <td class="small">@q.Severity</td>
+                    <td class="small">@if (last is not null) { <StatusBadge Status="@last.Status" /> <span class="text-muted" title="@last.Message">@Ui.Local(last.CheckedAtUtc)</span> } else { <span class="text-muted">not run yet</span> }</td>
+                    <td class="text-end">@if (CanEdit) { <button class="btn btn-sm btn-outline-primary" @onclick="() => Edit(q)">Edit</button> }</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    @if (CanEdit && editing is null) { <button class="btn btn-sm btn-outline-primary" @onclick="() => Edit(new QualityCheckDef { ExtractJobId = Job.ExtractJobId })">+ Add check</button> }
+
+    @if (editing is not null)
+    {
+        <div class="border rounded p-2 bg-light-subtle">
+            <div class="row g-2">
+                <div class="col-md-4">
+                    <label class="form-label small">Check</label>
+                    <select class="form-select form-select-sm" @bind="editing.CheckType" @bind:after="TypeChanged">
+                        <option value="@QualityCheckTypes.MinRows">Minimum rows per load</option>
+                        <option value="@QualityCheckTypes.RowChange">Row count change vs. recent loads</option>
+                        <option value="@QualityCheckTypes.SourceCount">Row count matches the source</option>
+                        <option value="@QualityCheckTypes.NullRate">NULL share of a column</option>
+                        <option value="@QualityCheckTypes.Duplicates">Duplicate keys</option>
+                        <option value="@QualityCheckTypes.CustomSql">Custom SQL</option>
+                    </select>
+                </div>
+                @if (editing.CheckType is QualityCheckTypes.NullRate or QualityCheckTypes.Duplicates)
+                {
+                    <div class="col-md-4">
+                        <label class="form-label small">@(editing.CheckType == QualityCheckTypes.NullRate ? "Column" : "Key column(s), comma separated")</label>
+                        <input class="form-control form-control-sm mono" list="quality-columns" @bind="editing.ColumnName" />
+                        <datalist id="quality-columns">@foreach (var c in Columns) { <option value="@c" /> }</datalist>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small">Rows</label>
+                        <select class="form-select form-select-sm" @bind="editing.Scope"><option value="Load">This load</option><option value="Table">All rows</option></select>
+                    </div>
+                }
+                @if (editing.CheckType == QualityCheckTypes.SourceCount)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label small">Cutoff column (optional): an increasing ID or insert time</label>
+                        <input class="form-control form-control-sm mono" list="quality-columns" @bind="editing.ColumnName" placeholder="OrderId or CreatedAt" />
+                        <datalist id="quality-columns">@foreach (var c in Columns) { <option value="@c" /> }</datalist>
+                    </div>
+                }
+                @if (editing.CheckType == QualityCheckTypes.CustomSql)
+                {
+                    <div class="col-12">
+                        <label class="form-label small">SQL returning one number – <span class="mono">{Table}</span> = the target table, parameters <span class="mono">@@LoadId</span>, <span class="mono">@@ExtractJobId</span>; runs read-only</label>
+                        <textarea class="form-control form-control-sm mono" rows="3" @bind="editing.SqlText"
+                                  placeholder="SELECT COUNT(*) FROM {Table} WHERE _LoadId = @@LoadId AND Amount < 0"></textarea>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small">Must be</label>
+                        <select class="form-select form-select-sm" @bind="editing.Operator">
+                            @foreach (var op in QualityRules.Operators) { <option value="@op">@op</option> }
+                        </select>
+                    </div>
+                }
+                <div class="col-md-2">
+                    <label class="form-label small">@ThresholdLabel</label>
+                    <input type="number" min="0" step="any" class="form-control form-control-sm" @bind="editing.Threshold" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Severity</label>
+                    <select class="form-select form-select-sm" @bind="editing.Severity"><option value="Error">Error</option><option value="Warning">Warning</option></select>
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="qactive" @bind="editing.IsActive" /><label class="form-check-label small" for="qactive">Active</label></div>
+                </div>
+                <div class="col-12 small text-muted">@Hint</div>
+            </div>
+            <div class="d-flex gap-2 mt-2">
+                <button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save check</button>
+                <button class="btn btn-sm btn-link" @onclick="() => { editing = null; error = null; }">Cancel</button>
+                @if (editing.QualityCheckId != 0) { <span class="ms-auto"></span><button class="btn btn-sm btn-outline-danger" @onclick="DeleteAsync">Delete</button> }
+            </div>
+        </div>
+    }
+
+    @if (results.Count > 0)
+    {
+        <div class="section-title mt-3 mb-1">Recent results</div>
+        <table class="table table-sm bg-white mb-0">
+            <thead class="table-light"><tr><th>Checked</th><th>Check</th><th>Result</th><th>Details</th></tr></thead>
+            <tbody>
+                @foreach (var r in results.Take(10))
+                {
+                    <tr>
+                        <td class="small text-nowrap">@Ui.Local(r.CheckedAtUtc)<br /><span class="text-muted">load @r.LoadRunId</span></td>
+                        <td class="small">@r.CheckType@(string.IsNullOrEmpty(r.ColumnName) ? "" : " · " + r.ColumnName)</td>
+                        <td><StatusBadge Status="@r.Status" /></td>
+                        <td class="small">@r.Message</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public ExtractJobDef Job { get; set; } = null!;
+    [Parameter] public bool CanEdit { get; set; }
+    /// <summary>Column names offered for NullRate / Duplicates.</summary>
+    [Parameter] public IEnumerable<string> Columns { get; set; } = [];
+
+    private List<QualityCheckDef> checks = [];
+    private List<QualityResultRow> results = [];
+    private QualityCheckDef? editing;
+    private string? error;
+    private int loadedFor = -1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Job.ExtractJobId != 0 && loadedFor != Job.ExtractJobId) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        loadedFor = Job.ExtractJobId;
+        checks = (await Repo.GetQualityChecksAsync(Job.ExtractJobId)).ToList();
+        results = (await Repo.GetQualityResultsAsync(Job.ExtractJobId, 50)).ToList();
+    }
+
+    private string ThresholdLabel => editing?.CheckType switch
+    {
+        QualityCheckTypes.MinRows => "Minimum rows",
+        QualityCheckTypes.RowChange => "Max deviation %",
+        QualityCheckTypes.SourceCount => "Tolerance %",
+        QualityCheckTypes.NullRate => "Max NULL %",
+        QualityCheckTypes.Duplicates => "Max duplicates",
+        _ => "Value"
+    };
+
+    private string Hint => editing?.CheckType switch
+    {
+        QualityCheckTypes.MinRows => "Catches empty or truncated loads: the rows read by the load must reach the minimum.",
+        QualityCheckTypes.RowChange => $"Compares the rows read with the average of the last {QualityRules.RowChangeHistory} successful loads (needs {QualityRules.RowChangeMinHistory}). Good for daily snapshots.",
+        QualityCheckTypes.SourceCount => "Counts the source table again (same filter) and compares with the rows written by this load (Merge: all rows of the target). The source keeps changing after the read: "
+            + "with a cutoff column only rows up to the highest loaded value are counted (new rows do not count; deleted ones still do). Not for query sources or Incremental jobs."
+            + (Job.UseNoLock && !Job.ReadSnapshot ? " This job reads WITH (NOLOCK), which can skip or double rows on a busy source: prefer \"Read a consistent snapshot\"." : ""),
+        QualityCheckTypes.NullRate => "Share of NULL values in the column, in this load or in all rows of the job.",
+        QualityCheckTypes.Duplicates => "Key values that occur more than once, in this load or in all rows of the job.",
+        QualityCheckTypes.CustomSql => "Any business rule as one number, e.g. negative amounts, orphan keys, sums that must match. Runs as the read-only export reader.",
+        _ => ""
+    };
+
+    private void Edit(QualityCheckDef q)
+    {
+        error = null;
+        editing = new QualityCheckDef
+        {
+            QualityCheckId = q.QualityCheckId, ExtractJobId = Job.ExtractJobId, CheckType = q.CheckType, ColumnName = q.ColumnName,
+            Threshold = q.QualityCheckId == 0 ? 1 : q.Threshold, Operator = q.Operator ?? "=", SqlText = q.SqlText, Scope = q.Scope,
+            Severity = q.Severity, IsActive = q.QualityCheckId == 0 || q.IsActive
+        };
+    }
+
+    private void TypeChanged()
+    {
+        editing!.Threshold = editing.CheckType switch
+        {
+            QualityCheckTypes.MinRows => 1, QualityCheckTypes.RowChange => 50, QualityCheckTypes.CustomSql => 0, _ => 0
+        };
+        if (editing.CheckType == QualityCheckTypes.Duplicates && string.IsNullOrWhiteSpace(editing.ColumnName) && !string.IsNullOrWhiteSpace(Job.KeyColumns))
+            editing.ColumnName = Job.KeyColumns;
+    }
+
+    private async Task SaveAsync()
+    {
+        error = null;
+        try
+        {
+            if (!await Access.CanEditExtractAsync(Job)) throw new InvalidOperationException("You are not allowed to change this job.");
+            var q = editing!;
+            if (q.CheckType is not (QualityCheckTypes.NullRate or QualityCheckTypes.Duplicates or QualityCheckTypes.SourceCount)) q.ColumnName = null;
+            if (q.CheckType is not (QualityCheckTypes.NullRate or QualityCheckTypes.Duplicates)) q.Scope = "Load";
+            if (string.IsNullOrWhiteSpace(q.ColumnName)) q.ColumnName = null;
+            if (q.CheckType != QualityCheckTypes.CustomSql) { q.SqlText = null; q.Operator = null; }
+            if (QualityRules.Validate(q, Job) is { } invalid) throw new InvalidOperationException(invalid);
+            await Repo.SaveQualityCheckAsync(q, await Access.UserNameAsync());
+            editing = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        error = null;
+        try
+        {
+            if (!await Access.CanEditExtractAsync(Job)) throw new InvalidOperationException("You are not allowed to change this job.");
+            await Repo.DeleteQualityCheckAsync(editing!.QualityCheckId, await Access.UserNameAsync());
+            editing = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+}

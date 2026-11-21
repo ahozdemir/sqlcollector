@@ -171,6 +171,39 @@ public sealed class AlertDispatcherTests(CollectorFixture fx) : IAsyncLifetime
         Assert.Equal(0, await fx.ScalarAsync<int>("DataCollectorMeta", "SELECT COUNT(*) FROM etl.AlertLog WHERE JobId = @id AND JobKind = 'Extract'", new { id = job.ExtractJobId }));
     }
 
+    [Fact]
+    public async Task QualityFailure_AndStaleData_AreSentToJobRecipients()
+    {
+        var dispatcher = _sp.GetRequiredService<AlertDispatcher>();
+        await SetBaselineAsync();
+        var job = await fx.SaveAsync(fx.NewExtractJob("T_Alert", j =>
+        {
+            j.Name = "quality_job_" + Guid.NewGuid().ToString("N")[..6]; j.NotifyEmails = "dq-owner@test.local"; j.FreshnessHours = 1;
+        }));
+
+        // a good load 3 hours ago (before alerting started) -> stale after the 1 h limit
+        await fx.ExecAsync("DataCollectorMeta", """
+            INSERT etl.LoadRun (ExtractJobId, TargetServerId, TargetDatabase, TargetSchema, TargetTable, Status, StartedAtUtc, FinishedAtUtc, RowsLoaded, HostName)
+            VALUES (@id, 1, 'DWH', 'stage', 'T_Alert', 'Succeeded', DATEADD(hour, -3, SYSUTCDATETIME()), DATEADD(hour, -3, SYSUTCDATETIME()), 5, 'TESTHOST');
+            """, new { id = job.ExtractJobId });
+        // a new load that succeeded but failed its quality checks: does not reset freshness, raises QualityFailed
+        await fx.ExecAsync("DataCollectorMeta", """
+            INSERT etl.LoadRun (ExtractJobId, TargetServerId, TargetDatabase, TargetSchema, TargetTable, Status, StartedAtUtc, FinishedAtUtc, RowsLoaded, HostName, QualityStatus)
+            VALUES (@id, 1, 'DWH', 'stage', 'T_Alert', 'Succeeded', DATEADD(second, -5, SYSUTCDATETIME()), SYSUTCDATETIME(), 0, 'TESTHOST', 'Failed');
+            INSERT etl.QualityResult (QualityCheckId, ExtractJobId, LoadRunId, Status, Measured, Expected, Message)
+            VALUES (0, @id, SCOPE_IDENTITY(), 'Failed', 0, '>= 1', '0 row(s) loaded, at least 1 expected.');
+            """, new { id = job.ExtractJobId });
+
+        await dispatcher.RunOnceAsync(CancellationToken.None);
+        var mails = (await MailsAsync()).Where(m => m.To == "dq-owner@test.local").ToList();
+        Assert.Contains(mails, m => m.Subject.Contains("DATA QUALITY CHECKS FAILED") && m.Subject.Contains(job.Name));
+        Assert.Contains(mails, m => m.Subject.Contains("NO FRESH DATA") && m.Subject.Contains(job.Name));
+
+        // nothing new -> nothing more (one alert per failed load and per stale period)
+        await dispatcher.RunOnceAsync(CancellationToken.None);
+        Assert.Equal(mails.Count, (await MailsAsync()).Count(m => m.To == "dq-owner@test.local"));
+    }
+
     private static int FreePort()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);

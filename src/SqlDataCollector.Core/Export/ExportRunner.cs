@@ -323,6 +323,7 @@ public sealed class ExportRunner(
 
         List<CsvPart> parts;
         IReadOnlyList<string> columns;
+        long rowsRead;
         var swWrite = Stopwatch.StartNew();
         bool parquet = job.FileFormat == ExportFileFormat.Parquet;
         await using (IExportPartWriter writer = parquet
@@ -334,8 +335,22 @@ public sealed class ExportRunner(
             await writer.CompleteAsync(ct);
             parts = writer.Parts;
             columns = writer.Header;
+            rowsRead = writer.TotalRows;
         }
         var writeSec = swWrite.Elapsed.TotalSeconds;
+
+        // integrity: the files must contain exactly the rows read from the DWH (counted again from the files themselves,
+        // CSV records RFC 4180-aware); the upload then verifies every object's size
+        long inFiles = 0;
+        foreach (var p in parts)
+        {
+            var n = parquet ? await FileRowCounter.CountParquetAsync(p.LocalPath, ct) : await FileRowCounter.CountCsvAsync(p.LocalPath, ct);
+            if (n != p.Rows)
+                throw new InvalidOperationException($"Integrity check failed: {Path.GetFileName(p.LocalPath)} should hold {p.Rows:N0} row(s) but contains {n:N0}. Nothing was uploaded.");
+            inFiles += n;
+        }
+        if (inFiles != rowsRead)
+            throw new InvalidOperationException($"Integrity check failed: {rowsRead:N0} row(s) were read from {objectName} but the files contain {inFiles:N0}. Nothing was uploaded.");
 
         var warnings = new List<string>();
         if (sampler?.Findings() is { Count: > 0 } findings)

@@ -4,8 +4,10 @@ Guidance for Claude Code in this repository. Read it fully before changing code.
 
 ## Working agreement
 
-- The owner (Ahmet) writes in **Turkish**: answer in Turkish. Everything in the product – UI, Help page, log and
-  exception messages, code comments, README – is **English**.
+- The owner (Ahmet) writes in **Turkish**: answer in Turkish. Everything in the product – UI, log and exception messages,
+  code comments, README – is **English**. Exception: the **Help page is bilingual** – English technical reference
+  (`Components/Pages/Help.razor`) and a plain-language Turkish guide (`Components/Pages/HelpTr.razor`, UI names kept in
+  English) with the same topic ids; a switch on the page chooses the language.
 - He reviews output critically and expects changes applied directly, with step-by-step numbers when explaining
   results (row counts, timings, before/after). Do not claim something works without running it.
 - **Delegate test execution to the `test-runner` subagent** (Sonnet 5.5, effort high – see `.claude/agents/test-runner.md`)
@@ -94,7 +96,7 @@ append/replace/incremental (datetime and rowversion watermarks), decimal(38) exa
 Strict failure + rollback, Evolve, partition-truncate retention, AllTables export (plain CSV upload, gzip archive,
 RFC 4180 content, per-table incremental). **Every behaviour change needs a test** (unit if possible, integration when SQL
 or GCS is involved). Definition of done: build without warnings, all tests green, smoke passes when the change touches
-runtime behaviour, Help page/README updated when user-visible behaviour changes.
+runtime behaviour, Help page (both languages) and README updated when user-visible behaviour changes.
 
 ## Invariants and hard-won lessons (do not regress)
 
@@ -132,4 +134,5 @@ runtime behaviour, Help page/README updated when user-visible behaviour changes.
   feature by design – the security boundary is the service account's permissions.
 - Keep `SqlDataCollector.Core` free of ASP.NET references. UI-only code stays in `src/SqlDataCollector`.
 - No FluentAssertions (license); use xUnit `Assert`.
-- New user-visible behaviour: update `Components/Pages/Help.razor` (and the `HelpLink` topic ids) and README.
+- New user-visible behaviour: update `Components/Pages/Help.razor` **and** `HelpTr.razor` (same `HelpLink` topic ids, both
+  tables of contents) and README. `HelpTopicsTests` fails when a topic exists in only one language.

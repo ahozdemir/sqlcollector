@@ -107,6 +107,20 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
   extracts. Each upstream success is used once; loops are refused; checked after every run and by the sync job
   (`etl.JobDependency`, `etl.JobTrigger`). Lists and Status show such jobs as *after A, B*.
 
+**Data quality** (job section *5 · Data quality*, page *Data quality*)
+- Checks run after every successful load: **minimum rows**, **row count change** vs. the last 10 loads, **source count**
+  reconciliation (table sources; Merge compares the current state), **NULL share** of a column, **duplicate keys**
+  (this load or all rows) and **custom SQL** returning one number (runs as the read-only export reader)
+- Severity *Warning* or *Error*; the worst result is the load's quality status (shown in the run history). A failed check
+  never undoes the load, but **jobs that run after it wait** until a load passes; alerts *QualityFailed* / *QualityWarning*
+- **Freshness**: alert *Stale* when a job has no good load for N hours (one alert per stale period)
+- **Integrity (always on):** every extract verifies *rows read from the source = rows that arrived in the target*, every export
+  re-counts the rows in the written CSV/Parquet files (RFC 4180-aware) against the rows read from the DWH, and the upload
+  verifies each object's size – exact, independent of ongoing changes in the source; a mismatch fails the run
+- **Consistent reads (optional):** *Read a consistent snapshot* reads the source in a SNAPSHOT transaction – one point in
+  time, no rows skipped or read twice on a busy source (unlike NOLOCK); needs `ALLOW_SNAPSHOT_ISOLATION ON` in the source DB.
+  The source count check can use a **cutoff column** (increasing ID or insert time) so rows added after the read do not count
+
 **Data protection** (Admin → *Data protection*)
 - **Masking rules** by column name pattern (`*Email*;*Mail`) and optional scope (`ERP.dbo.*`): **Hash** (HMAC-SHA256 with a
   key derived from `Secrets:Key` – deterministic, joinable, not reversible even for 11-digit IDs), **Partial** (last N visible),
@@ -131,7 +145,8 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
   delivery history. Dispatched every minute by the Web process (so a missing Worker is reported too).
 - Audit log, run history (with read/CSV vs upload timings), status page with active Workers and their queues
 - Hangfire Dashboard: full access for Admin, read-only for others
-- In-app **Help** (menu *Help*, plus `?` links next to each form section)
+- In-app **Help** in **English and Turkish** (switch on the page; the Turkish guide is plain-language with step-by-step
+  examples and FAQ), plus `?` links next to each form section
 
 ---
 

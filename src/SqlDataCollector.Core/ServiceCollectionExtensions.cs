@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MergeLoader>();
         services.AddSingleton<Privacy.MaskingService>();
         services.AddSingleton<Privacy.PrivacyScanner>();
+        services.AddSingleton<Quality.QualityService>();
         services.AddSingleton<SecretProtector>();
         services.AddSingleton<GcsCredentialStore>();
         services.AddSingleton<GcsUploader>();

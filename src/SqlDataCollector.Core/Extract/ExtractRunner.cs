@@ -22,7 +22,7 @@ public static class SourceCommandBuilder
         var sb = new StringBuilder("SELECT ");
         sb.Append(string.IsNullOrWhiteSpace(job.ColumnList) ? "*" : job.ColumnList);
         sb.Append(" FROM ").Append(SqlIdent.Quote(job.SourceSchema ?? "dbo", job.SourceTable!));
-        if (job.UseNoLock) sb.Append(" WITH (NOLOCK)");
+        if (job.UseNoLock && !job.ReadSnapshot) sb.Append(" WITH (NOLOCK)");   // a snapshot read is consistent by itself
 
         var predicates = new List<string>();
         if (!string.IsNullOrWhiteSpace(job.FilterClause)) predicates.Add($"({job.FilterClause})");
@@ -42,6 +42,7 @@ public sealed class ExtractRunner(
     TargetTableManager tableManager,
     MergeLoader mergeLoader,
     Privacy.MaskingService masking,
+    Quality.QualityService quality,
     DependencyService dependencies,
     IOptions<CollectorOptions> options,
     ILogger<ExtractRunner> logger)
@@ -118,6 +119,9 @@ public sealed class ExtractRunner(
                     logger.LogError(ex, "Replace {Name}: could not delete previous loads; will retry on the next run.", job.Name);
                 }
             }
+
+            // data quality: the job's checks on what was just loaded (never fails the load itself; failed checks keep dependents waiting)
+            await quality.RunAsync(job, loadId, rows, source, target, targetConn, ct);
         }
         catch (Exception ex)
         {
@@ -161,16 +165,35 @@ public sealed class ExtractRunner(
         ExtractJobDef job, SqlServerDef sourceServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
         bool rebuild, CancellationToken ct)
     {
+        // a refused snapshot can surface at BEGIN, on the first statement or on the first row fetch (inside the bulk copy)
+        try { return await CopyCoreAsync(job, sourceServer, state, loadId, loadedAtUtc, collector, rebuild, ct); }
+        catch (Exception ex) when (job.ReadSnapshot && SnapshotRefused(ex)) { throw SnapshotNotAllowed(job, ex); }
+    }
+
+    private static bool SnapshotRefused(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+            if (e is SqlException s && IsSnapshotNotAllowed(s)) return true;
+        return false;
+    }
+
+    private async Task<(long Rows, string? WmType, string? WmValue, MergeCounts? Merge)> CopyCoreAsync(
+        ExtractJobDef job, SqlServerDef sourceServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
+        bool rebuild, CancellationToken ct)
+    {
         await using var source = await factory.OpenAsync(sourceServer, job.SourceDatabase, forWrite: false, ct);
+        // optional consistent read: one point in time, nothing skipped or read twice while the source keeps changing
+        await using var snapshot = job.ReadSnapshot ? await BeginSnapshotAsync(source, job, ct) : null;
 
         bool hasWatermark = state?.WatermarkValue is not null;
         await using var cmd = source.CreateCommand();
         cmd.CommandText = SourceCommandBuilder.BuildSql(job, hasWatermark);
+        cmd.Transaction = snapshot;
         cmd.CommandTimeout = job.CommandTimeoutSec;
         if (job.UsesWatermark() && (hasWatermark || job.SourceType == SourceType.Query))
             cmd.Parameters.Add(Watermark.ToParameter(SourceCommandBuilder.WatermarkParam, state?.WatermarkType, state?.WatermarkValue));
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        await using var reader = await ExecuteSourceAsync(cmd, job, ct);
         // EXEC sp ... may return row-less results first
         while (reader.FieldCount == 0 && await reader.NextResultAsync(ct)) { }
         if (reader.FieldCount == 0)
@@ -247,10 +270,49 @@ public sealed class ExtractRunner(
 
         await bulk.WriteToServerAsync(augmented, ct);
 
+        // integrity: every row read from the source must have arrived. Counted on the target side (this load, the rebuild table
+        // or the merge staging table), so ongoing changes in the source can never cause a false alarm.
+        var written = await CountWrittenAsync(collector, job, loadId, rebuild, plan is not null, ct);
+        if (written != augmented.RowsRead)
+            throw new InvalidOperationException(
+                $"Integrity check failed: {augmented.RowsRead:N0} row(s) were read from the source but {written:N0} arrived in the target. The load is rolled back.");
+
         var mergeCounts = plan is null ? null : await mergeLoader.MergeAsync(collector, plan, augmented.RowsRead, job.Name, ct);
 
         string? wmValue = augmented.MaxWatermark is null ? null : Watermark.Serialize(augmented.MaxWatermark);
         return (augmented.RowsRead, wmValue is null ? null : wmType, wmValue, mergeCounts);
+    }
+
+    private static async Task<SqlTransaction> BeginSnapshotAsync(SqlConnection source, ExtractJobDef job, CancellationToken ct)
+    {
+        try { return (SqlTransaction)await source.BeginTransactionAsync(System.Data.IsolationLevel.Snapshot, ct); }
+        catch (SqlException ex) when (IsSnapshotNotAllowed(ex)) { throw SnapshotNotAllowed(job, ex); }
+    }
+
+    private static async Task<SqlDataReader> ExecuteSourceAsync(SqlCommand cmd, ExtractJobDef job, CancellationToken ct)
+    {
+        try { return await cmd.ExecuteReaderAsync(ct); }
+        catch (SqlException ex) when (IsSnapshotNotAllowed(ex)) { throw SnapshotNotAllowed(job, ex); }
+    }
+
+    /// <summary>Error 3952 (and the related 3951/3960 family) when the database does not allow SNAPSHOT isolation.</summary>
+    public static bool IsSnapshotNotAllowed(SqlException ex) =>
+        ex.Number is 3952 or 3951 || ex.Message.Contains("snapshot isolation is not allowed", StringComparison.OrdinalIgnoreCase);
+
+    public static InvalidOperationException SnapshotNotAllowed(ExtractJobDef job, Exception inner) => new(
+        $"Snapshot reads are not allowed in source database {job.SourceDatabase}. The DBA enables them once with " +
+        $"ALTER DATABASE {SqlIdent.Quote(job.SourceDatabase)} SET ALLOW_SNAPSHOT_ISOLATION ON; – or untick \"Read a consistent snapshot\".", inner);
+
+    /// <summary>Rows of this load in the target: the merge staging table, the rebuild table, or the rows with this _LoadId.</summary>
+    private static async Task<long> CountWrittenAsync(SqlConnection collector, ExtractJobDef job, long loadId, bool rebuild, bool merge, CancellationToken ct)
+    {
+        await using var cmd = collector.CreateCommand();
+        cmd.CommandTimeout = 0;
+        cmd.CommandText = merge ? $"SELECT COUNT_BIG(*) FROM {MergeSql.Staging};"
+            : rebuild ? $"SELECT COUNT_BIG(*) FROM {SqlIdent.Quote(job.TargetSchema, job.TargetTable + TargetTableManager.RebuildSuffix)};"
+            : $"SELECT COUNT_BIG(*) FROM {SqlIdent.Quote(job.TargetSchema, job.TargetTable)} WHERE {SqlIdent.Quote(SqlIdent.LoadIdColumn)} = @load;";
+        cmd.Parameters.AddWithValue("@load", loadId);
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));
     }
 
     private async Task<bool> CleanupLoadAsync(SqlConnection collector, ExtractJobDef job, long loadId)

@@ -97,6 +97,9 @@ public static partial class AlertFormat
             AlertEvents.Missed => $"MISSED: {what} did not run as scheduled",
             AlertEvents.NoServer => $"NO SERVER: {e.JobName}",
             AlertEvents.CertExpiring => "CERTIFICATE: the HTTPS certificate expires soon",
+            AlertEvents.QualityFailed => $"DATA QUALITY CHECKS FAILED: {what}",
+            AlertEvents.QualityWarning => $"DATA QUALITY WARNING: {what}",
+            AlertEvents.Stale => $"NO FRESH DATA: {what}",
             _ => $"{e.EventType.ToUpperInvariant()}: {what}{tail}"
         };
     }

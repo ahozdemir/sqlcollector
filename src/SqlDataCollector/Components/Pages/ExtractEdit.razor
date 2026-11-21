@@ -112,7 +112,7 @@
                         <input class="form-control form-control-sm mono" @bind="job.FilterClause" placeholder="E.g. Status <> 'D' AND CreatedAt >= '2025-01-01'" />
                     </div>
                     <div class="col-md-3 d-flex align-items-end">
-                        <div class="form-check small"><input class="form-check-input" type="checkbox" id="nl" @bind="job.UseNoLock" /><label class="form-check-label" for="nl">WITH (NOLOCK)</label></div>
+                        <div class="form-check small"><input class="form-check-input" type="checkbox" id="nl" @bind="job.UseNoLock" disabled="@job.ReadSnapshot" /><label class="form-check-label" for="nl" title="Dirty reads: rows can be skipped or read twice while the source changes">WITH (NOLOCK)</label></div>
                     </div>
                 </div>
             }
@@ -125,6 +125,19 @@
                     <div class="form-text">In Incremental mode use the <code>@@WatermarkFrom</code> parameter in the query; it is NULL on the first run.</div>
                 </div>
             }
+
+            <div class="form-check small mt-2">
+                <input class="form-check-input" type="checkbox" id="snap" @bind="job.ReadSnapshot" @bind:after="SnapshotChangedAsync" />
+                <label class="form-check-label" for="snap">Read a consistent snapshot (SNAPSHOT isolation) <HelpLink Topic="consistency" Title="Consistent reads and integrity" /></label>
+                <div class="form-text">
+                    One point in time: no row is skipped or read twice while the source keeps changing; NOLOCK is ignored. Recommended for busy sources.
+                    @if (job.ReadSnapshot && snapshotAllowed is false)
+                    {
+                        <br /><span class="text-danger">Not allowed in @job.SourceDatabase yet – the DBA runs once: <span class="mono">ALTER DATABASE [@job.SourceDatabase] SET ALLOW_SNAPSHOT_ISOLATION ON;</span></span>
+                    }
+                    else if (job.ReadSnapshot && snapshotAllowed is true) { <br /><span class="text-success">Allowed in @job.SourceDatabase.</span> }
+                </div>
+            </div>
 
             <div class="mt-2">
                 <button class="btn btn-sm btn-outline-primary" @onclick="PreviewAsync" disabled="@(!CanPreview)">Preview (first 50 rows)</button>
@@ -342,6 +355,11 @@
                 </div>
             </div>
         </div></div>
+
+        <div class="card mt-3"><div class="card-body">
+            <div class="section-title mb-2">5 · Data quality <HelpLink Topic="quality" Title="Data quality checks" /></div>
+            <QualityChecksEditor Job="job" CanEdit="canEdit" Columns="QualityColumns" />
+        </div></div>
     </div>
 </div>
 
@@ -406,6 +424,7 @@
     private IReadOnlyList<ColumnInfo> KeyCandidates =>
         (job.SourceType == SourceType.Table ? columns.Where(c => advancedColumns || selectedColumns.Count == 0 || selectedColumns.Contains(c.Name)) : preview?.Schema ?? []).ToList();
     private IReadOnlyList<string> MergeKeys => job.KeyColumnList();
+    private IEnumerable<string> QualityColumns => (job.SourceType == SourceType.Table ? columns : preview?.Schema ?? []).Select(c => c.Name);
 
     private void ToggleKey(string name, bool on)
     {
@@ -418,6 +437,14 @@
     }
 
     private void LoadModeChanged() => SuggestPrimaryKey();
+
+    private bool? snapshotAllowed;
+    private async Task SnapshotChangedAsync()
+    {
+        snapshotAllowed = null;
+        if (!job.ReadSnapshot || job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) return;
+        try { snapshotAllowed = await Catalog.SnapshotAllowedAsync(job.SourceServerId, job.SourceDatabase); } catch { snapshotAllowed = null; }
+    }
 
     private void SuggestPrimaryKey()
     {
@@ -453,6 +480,7 @@
                 await EnsureServerVisible(sourceServers, job.SourceServerId);
                 await EnsureServerVisible(targetServers, job.TargetServerId);
                 await LoadSourceDbsAsync(keepSelection: true);
+                await SnapshotChangedAsync();
                 await LoadTargetDbsAsync(keepSelection: true);
                 if (job.SourceType == SourceType.Table && job.SourceTable is not null)
                 {
@@ -708,6 +736,7 @@
         var errs = new List<string>();
         if (!MultiTable && string.IsNullOrWhiteSpace(job.Name)) errs.Add("Job name is required.");
         job.NotifyEmails = string.IsNullOrWhiteSpace(job.NotifyEmails) ? null : job.NotifyEmails.Trim();
+        if (job.FreshnessHours is <= 0) job.FreshnessHours = null;
         if (SqlDataCollector.Alerts.AlertFormat.InvalidEmails(job.NotifyEmails) is { Count: > 0 } badMails) errs.Add($"Invalid Notify e-mail address(es): {string.Join(", ", badMails)}");
         if (job.LoadMode != LoadMode.Replace) job.ReplaceRebuild = false;
         if (job.ReplaceRebuild && job.PartitionDaily) errs.Add("Replace with rebuild cannot be combined with daily partitioning.");

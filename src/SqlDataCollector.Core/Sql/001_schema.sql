@@ -463,3 +463,55 @@ IF COL_LENGTH(N'etl.ExportJob', N'ParquetCompression') IS NULL
     ALTER TABLE etl.ExportJob ADD ParquetCompression varchar(10) NOT NULL CONSTRAINT DF_ExportJob_ParquetCompression DEFAULT ('Snappy')
         CONSTRAINT CK_ExportJob_ParquetCompression CHECK (ParquetCompression IN ('Snappy','Zstd','Gzip','None'));
 GO
+
+/* ---------------- Data quality ----------------
+   QualityCheck: checks of an extract job, run after every successful load.
+     CheckType  MinRows (rows read >= Threshold) | RowChange (deviation from the average of recent runs <= Threshold %)
+                SourceCount (source row count vs target, difference <= Threshold %) | NullRate (NULL share of ColumnName <= Threshold %)
+                Duplicates (duplicate keys of ColumnName list <= Threshold) | CustomSql (scalar of SqlText <Operator> Threshold)
+     Scope      Load (rows of this load) | Table (all rows of the job) – NullRate, Duplicates
+     Severity   Warning | Error (Error: the load's QualityStatus is Failed, dependents wait, alert QualityFailed)
+   QualityResult: one row per check and load. LoadRun.QualityStatus: Passed | Warning | Failed (NULL = no checks).
+   ExtractJob.FreshnessHours: alert (Stale) when the job had no successful load for this many hours. */
+IF OBJECT_ID(N'etl.QualityCheck', N'U') IS NULL
+CREATE TABLE etl.QualityCheck (
+    QualityCheckId int IDENTITY(1,1) NOT NULL CONSTRAINT PK_QualityCheck PRIMARY KEY,
+    ExtractJobId   int NOT NULL CONSTRAINT FK_QualityCheck_Job REFERENCES etl.ExtractJob(ExtractJobId) ON DELETE CASCADE,
+    CheckType      varchar(20) NOT NULL CONSTRAINT CK_QualityCheck_Type CHECK (CheckType IN ('MinRows','RowChange','SourceCount','NullRate','Duplicates','CustomSql')),
+    ColumnName     nvarchar(400) NULL,
+    Threshold      decimal(19,4) NULL,
+    Operator       varchar(2) NULL CONSTRAINT CK_QualityCheck_Operator CHECK (Operator IS NULL OR Operator IN ('=','<>','<','<=','>','>=')),
+    SqlText        nvarchar(max) NULL,
+    Scope          varchar(10) NOT NULL CONSTRAINT DF_QualityCheck_Scope DEFAULT ('Load') CONSTRAINT CK_QualityCheck_Scope CHECK (Scope IN ('Load','Table')),
+    Severity       varchar(10) NOT NULL CONSTRAINT DF_QualityCheck_Severity DEFAULT ('Error') CONSTRAINT CK_QualityCheck_Severity CHECK (Severity IN ('Warning','Error')),
+    IsActive       bit NOT NULL CONSTRAINT DF_QualityCheck_Active DEFAULT (1),
+    ModifiedBy     nvarchar(256) NOT NULL,
+    ModifiedAtUtc  datetime2(3) NOT NULL CONSTRAINT DF_QualityCheck_Modified DEFAULT (SYSUTCDATETIME())
+);
+GO
+IF OBJECT_ID(N'etl.QualityResult', N'U') IS NULL
+BEGIN
+    CREATE TABLE etl.QualityResult (
+        QualityResultId bigint IDENTITY(1,1) NOT NULL CONSTRAINT PK_QualityResult PRIMARY KEY,
+        QualityCheckId  int NOT NULL,
+        ExtractJobId    int NOT NULL,
+        LoadRunId       bigint NOT NULL,
+        CheckedAtUtc    datetime2(3) NOT NULL CONSTRAINT DF_QualityResult_Checked DEFAULT (SYSUTCDATETIME()),
+        Status          varchar(10) NOT NULL,   -- Passed | Warning | Failed | Error (the check could not run)
+        Measured        decimal(38,4) NULL,
+        Expected        nvarchar(200) NULL,
+        Message         nvarchar(1000) NULL
+    );
+    CREATE INDEX IX_QualityResult_Job ON etl.QualityResult (ExtractJobId, QualityResultId DESC);
+    CREATE INDEX IX_QualityResult_Run ON etl.QualityResult (LoadRunId);
+END
+GO
+IF COL_LENGTH(N'etl.LoadRun', N'QualityStatus') IS NULL ALTER TABLE etl.LoadRun ADD QualityStatus varchar(10) NULL;
+IF COL_LENGTH(N'etl.ExtractJob', N'FreshnessHours') IS NULL ALTER TABLE etl.ExtractJob ADD FreshnessHours int NULL;
+GO
+
+/* ---------------- Consistent reads ----------------
+   ExtractJob.ReadSnapshot: read the source inside a SNAPSHOT isolation transaction (one consistent point in time, no
+   rows skipped or read twice while the source changes; NOLOCK is ignored). Needs ALLOW_SNAPSHOT_ISOLATION ON in the source database. */
+IF COL_LENGTH(N'etl.ExtractJob', N'ReadSnapshot') IS NULL ALTER TABLE etl.ExtractJob ADD ReadSnapshot bit NOT NULL CONSTRAINT DF_ExtractJob_ReadSnapshot DEFAULT (0);
+GO

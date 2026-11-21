@@ -17,10 +17,10 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
 
     private const string ExtractSelect = """
         SELECT j.ExtractJobId, j.Name, j.SourceServerId, ss.Name AS SourceServerName, j.SourceDatabase,
-               j.SourceType, j.SourceSchema, j.SourceTable, j.ColumnList, j.FilterClause, j.SourceQuery, j.UseNoLock,
+               j.SourceType, j.SourceSchema, j.SourceTable, j.ColumnList, j.FilterClause, j.SourceQuery, j.UseNoLock, j.ReadSnapshot,
                j.LoadMode, j.WatermarkColumn, j.SchemaPolicy, j.PartitionDaily, j.TargetServerId, ts.Name AS TargetServerName, j.TargetDatabase,
                j.TargetSchema, j.TargetTable, j.CronExpression, j.TimeZoneId, j.RetentionDays, j.CommandTimeoutSec,
-               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.KeyColumns, j.MergeDeleteMissing, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
+               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.KeyColumns, j.MergeDeleteMissing, j.FreshnessHours, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
         FROM etl.ExtractJob j
         JOIN etl.SqlServer ss ON ss.SqlServerId = j.SourceServerId
         JOIN etl.SqlServer ts ON ts.SqlServerId = j.TargetServerId
@@ -185,12 +185,12 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             j.CreatedBy = user;
             j.ExtractJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExtractJob (Name, SourceServerId, SourceDatabase, SourceType, SourceSchema, SourceTable, ColumnList, FilterClause,
-                    SourceQuery, UseNoLock, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
-                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, KeyColumns, MergeDeleteMissing, TriggerMode, IsActive, CreatedBy, ModifiedBy)
+                    SourceQuery, UseNoLock, ReadSnapshot, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
+                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, KeyColumns, MergeDeleteMissing, FreshnessHours, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExtractJobId
                 VALUES (@Name, @SourceServerId, @SourceDatabase, @SourceType, @SourceSchema, @SourceTable, @ColumnList, @FilterClause,
-                    @SourceQuery, @UseNoLock, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
-                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @KeyColumns, @MergeDeleteMissing, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
+                    @SourceQuery, @UseNoLock, @ReadSnapshot, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
+                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @KeyColumns, @MergeDeleteMissing, @FreshnessHours, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, j);
         }
         else
@@ -198,10 +198,10 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             await c.ExecuteAsync("""
                 UPDATE etl.ExtractJob SET Name = @Name, SourceServerId = @SourceServerId, SourceDatabase = @SourceDatabase,
                     SourceType = @SourceType, SourceSchema = @SourceSchema, SourceTable = @SourceTable, ColumnList = @ColumnList,
-                    FilterClause = @FilterClause, SourceQuery = @SourceQuery, UseNoLock = @UseNoLock, LoadMode = @LoadMode,
+                    FilterClause = @FilterClause, SourceQuery = @SourceQuery, UseNoLock = @UseNoLock, ReadSnapshot = @ReadSnapshot, LoadMode = @LoadMode,
                     WatermarkColumn = @WatermarkColumn, SchemaPolicy = @SchemaPolicy, PartitionDaily = @PartitionDaily, TargetServerId = @TargetServerId, TargetDatabase = @TargetDatabase,
                     TargetSchema = @TargetSchema, TargetTable = @TargetTable, CronExpression = @CronExpression, TimeZoneId = @TimeZoneId,
-                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, KeyColumns = @KeyColumns, MergeDeleteMissing = @MergeDeleteMissing, TriggerMode = @TriggerMode, IsActive = @IsActive,
+                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, KeyColumns = @KeyColumns, MergeDeleteMissing = @MergeDeleteMissing, FreshnessHours = @FreshnessHours, TriggerMode = @TriggerMode, IsActive = @IsActive,
                     ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExtractJobId = @ExtractJobId;
                 """, j);
@@ -527,10 +527,16 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
         await using var c = Conn();
         return (await c.QueryAsync<DependencyStateRow>("""
             WITH ok AS (
-                SELECT 'Extract' AS Kind, r.ExtractJobId AS JobId, MAX(r.FinishedAtUtc) AS LastOkUtc
-                FROM etl.LoadRun r
-                WHERE r.Status = 'Succeeded' AND r.ExtractJobId IN (SELECT UpstreamId FROM etl.JobDependency WHERE UpstreamKind = 'Extract')
-                GROUP BY r.ExtractJobId
+                -- the LATEST successful load counts, and only if its quality checks did not fail: the target table now holds
+                -- that load's data (Replace/Merge), so an earlier good load must not release the dependents
+                SELECT 'Extract' AS Kind, x.ExtractJobId AS JobId,
+                       CASE WHEN ISNULL(x.QualityStatus, '') = 'Failed' THEN NULL ELSE x.FinishedAtUtc END AS LastOkUtc
+                FROM (SELECT r.ExtractJobId, r.FinishedAtUtc, r.QualityStatus,
+                             ROW_NUMBER() OVER (PARTITION BY r.ExtractJobId ORDER BY r.LoadRunId DESC) AS rn
+                      FROM etl.LoadRun r
+                      WHERE r.Status = 'Succeeded'
+                        AND r.ExtractJobId IN (SELECT UpstreamId FROM etl.JobDependency WHERE UpstreamKind = 'Extract')) x
+                WHERE x.rn = 1
                 UNION ALL
                 -- an export with nothing new to send (Skipped) has finished its work too
                 SELECT 'Export', r.ExportJobId, MAX(r.FinishedAtUtc)
@@ -553,6 +559,117 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             UPDATE etl.JobTrigger SET LastTriggeredAtUtc = SYSUTCDATETIME() WHERE JobKind = @Kind AND JobId = @Id;
             IF @@ROWCOUNT = 0 INSERT etl.JobTrigger (JobKind, JobId, LastTriggeredAtUtc) VALUES (@Kind, @Id, SYSUTCDATETIME());
             """, new { job.Kind, job.Id });
+    }
+
+    // ================================================================ data quality
+
+    public async Task<IReadOnlyList<QualityCheckDef>> GetQualityChecksAsync(int? extractJobId = null)
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<QualityCheckDef>(
+            "SELECT * FROM etl.QualityCheck WHERE @extractJobId IS NULL OR ExtractJobId = @extractJobId ORDER BY ExtractJobId, QualityCheckId",
+            new { extractJobId })).AsList();
+    }
+
+    public async Task<int> SaveQualityCheckAsync(QualityCheckDef q, string user)
+    {
+        await using var c = Conn();
+        q.ModifiedBy = user;
+        bool isNew = q.QualityCheckId == 0;
+        if (isNew)
+            q.QualityCheckId = await c.ExecuteScalarAsync<int>("""
+                INSERT etl.QualityCheck (ExtractJobId, CheckType, ColumnName, Threshold, Operator, SqlText, Scope, Severity, IsActive, ModifiedBy)
+                OUTPUT inserted.QualityCheckId
+                VALUES (@ExtractJobId, @CheckType, @ColumnName, @Threshold, @Operator, @SqlText, @Scope, @Severity, @IsActive, @ModifiedBy);
+                """, q);
+        else
+            await c.ExecuteAsync("""
+                UPDATE etl.QualityCheck SET CheckType = @CheckType, ColumnName = @ColumnName, Threshold = @Threshold, Operator = @Operator,
+                       SqlText = @SqlText, Scope = @Scope, Severity = @Severity, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
+                WHERE QualityCheckId = @QualityCheckId AND ExtractJobId = @ExtractJobId;
+                """, q);
+        await AuditAsync(user, isNew ? "Create" : "Update", "QualityCheck", q.QualityCheckId, q);
+        return q.QualityCheckId;
+    }
+
+    public async Task DeleteQualityCheckAsync(int id, string user)
+    {
+        await using var c = Conn();
+        await c.ExecuteAsync("DELETE etl.QualityCheck WHERE QualityCheckId = @id", new { id });
+        await AuditAsync(user, "Delete", "QualityCheck", id, null);
+    }
+
+    /// <summary>Stores the results of one load's checks and the load's overall QualityStatus in one transaction.</summary>
+    public async Task SaveQualityResultsAsync(long loadRunId, string? qualityStatus, IReadOnlyList<QualityResultRow> results)
+    {
+        await using var c = Conn();
+        await c.OpenAsync();
+        await using var tx = await c.BeginTransactionAsync();
+        foreach (var r in results)
+            await c.ExecuteAsync("""
+                INSERT etl.QualityResult (QualityCheckId, ExtractJobId, LoadRunId, Status, Measured, Expected, Message)
+                VALUES (@QualityCheckId, @ExtractJobId, @LoadRunId, @Status, @Measured, @Expected, @Message);
+                """, r, tx);
+        await c.ExecuteAsync("UPDATE etl.LoadRun SET QualityStatus = @qualityStatus WHERE LoadRunId = @loadRunId", new { loadRunId, qualityStatus }, tx);
+        await tx.CommitAsync();
+    }
+
+    private const string QualityResultSelect = """
+        SELECT r.*, j.Name AS JobName, q.CheckType, q.ColumnName, q.Severity
+        FROM etl.QualityResult r
+        LEFT JOIN etl.ExtractJob j ON j.ExtractJobId = r.ExtractJobId
+        LEFT JOIN etl.QualityCheck q ON q.QualityCheckId = r.QualityCheckId
+        """;
+
+    public async Task<IReadOnlyList<QualityResultRow>> GetQualityResultsAsync(int? extractJobId, int top = 100)
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<QualityResultRow>($"""
+            SELECT TOP (@top) x.* FROM ({QualityResultSelect} WHERE @extractJobId IS NULL OR r.ExtractJobId = @extractJobId) x
+            ORDER BY x.QualityResultId DESC;
+            """, new { extractJobId, top })).AsList();
+    }
+
+    public async Task<IReadOnlyList<QualityResultRow>> GetQualityResultsForRunAsync(long loadRunId)
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<QualityResultRow>(QualityResultSelect + " WHERE r.LoadRunId = @loadRunId ORDER BY r.QualityResultId",
+            new { loadRunId })).AsList();
+    }
+
+    /// <summary>The latest result of every active check (the "current" data quality state).</summary>
+    public async Task<IReadOnlyList<QualityResultRow>> GetLatestQualityResultsAsync()
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<QualityResultRow>($"""
+            WITH x AS ({QualityResultSelect.Replace("SELECT r.*", "SELECT r.*, ROW_NUMBER() OVER (PARTITION BY r.QualityCheckId ORDER BY r.QualityResultId DESC) AS rn")}
+                       WHERE q.IsActive = 1)
+            SELECT * FROM x WHERE rn = 1 ORDER BY JobName, QualityCheckId;
+            """)).AsList();
+    }
+
+    /// <summary>Rows read by the job's recent successful loads before the given one (RowChange baseline).</summary>
+    public async Task<IReadOnlyList<long>> GetRecentLoadedRowsAsync(int extractJobId, long beforeLoadRunId, int count)
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<long>("""
+            SELECT TOP (@count) RowsLoaded FROM etl.LoadRun
+            WHERE ExtractJobId = @extractJobId AND LoadRunId < @beforeLoadRunId AND Status = 'Succeeded' AND RowsLoaded IS NOT NULL
+            ORDER BY LoadRunId DESC;
+            """, new { extractJobId, beforeLoadRunId, count })).AsList();
+    }
+
+    /// <summary>Latest successful load (quality not failed) per extract job, for freshness alerts.</summary>
+    public async Task<IReadOnlyDictionary<int, (long LoadRunId, DateTime FinishedAtUtc)>> GetLastGoodLoadsAsync()
+    {
+        await using var c = Conn();
+        var rows = await c.QueryAsync<(int JobId, long LoadRunId, DateTime FinishedAtUtc)>("""
+            SELECT ExtractJobId, LoadRunId, FinishedAtUtc FROM (
+                SELECT ExtractJobId, LoadRunId, FinishedAtUtc, ROW_NUMBER() OVER (PARTITION BY ExtractJobId ORDER BY LoadRunId DESC) AS rn
+                FROM etl.LoadRun WHERE Status = 'Succeeded' AND ISNULL(QualityStatus, '') <> 'Failed' AND FinishedAtUtc IS NOT NULL) x
+            WHERE rn = 1;
+            """);
+        return rows.ToDictionary(r => r.JobId, r => (r.LoadRunId, r.FinishedAtUtc));
     }
 
     // ================================================================ data protection
@@ -610,13 +727,13 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                        CONCAT(lr.TargetDatabase, '.', lr.TargetSchema, '.', lr.TargetTable,
                               CASE WHEN lr.RowsInserted IS NOT NULL THEN CONCAT('  merge: +', lr.RowsInserted, ' ~', lr.RowsUpdated, ' -', lr.RowsDeleted) END,
                               CASE WHEN lr.WatermarkTo IS NOT NULL THEN CONCAT('  wm: ', lr.WatermarkFrom, ' → ', lr.WatermarkTo) END) AS Detail,
-                       lr.ErrorMessage
+                       lr.ErrorMessage, lr.QualityStatus
                 FROM etl.LoadRun lr LEFT JOIN etl.ExtractJob j ON j.ExtractJobId = lr.ExtractJobId
                 WHERE (@kind IS NULL OR @kind = 'Extract')
                 UNION ALL
                 SELECT er.ExportRunId, 'Export', er.ExportJobId, ISNULL(e.Name, CONCAT('#', er.ExportJobId)),
                        er.Status, er.TriggeredBy, er.StartedAtUtc, er.FinishedAtUtc, er.RowsExported,
-                       er.ObjectNames, er.ErrorMessage
+                       er.ObjectNames, er.ErrorMessage, CAST(NULL AS varchar(10))
                 FROM etl.ExportRun er LEFT JOIN etl.ExportJob e ON e.ExportJobId = er.ExportJobId
                 WHERE (@kind IS NULL OR @kind = 'Export')
             ) x
@@ -689,12 +806,12 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
         return (await c.QueryAsync<Alerts.FinishedRunRow>("""
             WITH x AS (
                 SELECT 'Extract' AS Kind, r.LoadRunId AS RunId, r.ExtractJobId AS JobId, r.Status, r.StartedAtUtc, r.FinishedAtUtc,
-                       r.RowsLoaded AS [Rows], r.ErrorMessage, r.HostName, r.TriggeredBy,
+                       r.RowsLoaded AS [Rows], r.ErrorMessage, r.HostName, r.TriggeredBy, r.QualityStatus,
                        LAG(r.Status) OVER (PARTITION BY r.ExtractJobId ORDER BY r.LoadRunId) AS PrevStatus
                 FROM etl.LoadRun r WHERE r.Status <> 'Running'
                 UNION ALL
                 SELECT 'Export', r.ExportRunId, r.ExportJobId, r.Status, r.StartedAtUtc, r.FinishedAtUtc,
-                       r.RowsExported, r.ErrorMessage, r.HostName, r.TriggeredBy,
+                       r.RowsExported, r.ErrorMessage, r.HostName, r.TriggeredBy, CAST(NULL AS varchar(10)),
                        LAG(r.Status) OVER (PARTITION BY r.ExportJobId ORDER BY r.ExportRunId)
                 FROM etl.ExportRun r WHERE r.Status NOT IN ('Running', 'Skipped'))
             SELECT x.*, COALESCE(j.Name, e.Name, CONCAT(x.Kind, ' #', x.JobId)) AS JobName, COALESCE(j.NotifyEmails, e.NotifyEmails) AS NotifyEmails
@@ -842,6 +959,8 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
         n += await SqlHelpers.DeleteInBatchesAsync(c, "etl", "PermissionCheck", "CheckedAtUtc < @cutoff",
             p => p.AddWithValue("@cutoff", now.AddDays(-permissionCheckDays)), batchSize, ct);
         n += await SqlHelpers.DeleteInBatchesAsync(c, "etl", "AlertLog", "CreatedAtUtc < @cutoff",
+            p => p.AddWithValue("@cutoff", now.AddDays(-runLogDays)), batchSize, ct);
+        n += await SqlHelpers.DeleteInBatchesAsync(c, "etl", "QualityResult", "CheckedAtUtc < @cutoff",
             p => p.AddWithValue("@cutoff", now.AddDays(-runLogDays)), batchSize, ct);
         return n;
     }

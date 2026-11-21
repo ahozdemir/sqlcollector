@@ -1,0 +1,457 @@
+@* Türkçe, sade anlatımlı yardım. Konu kimlikleri (id) İngilizce sayfayla aynıdır: formlardaki "?" linkleri her iki dilde aynı konuya gider.
+   Ekrandaki alan ve buton adları İngilizce olduğu için metinde kalın yazıyla ekrandaki adlarıyla geçer. *@
+
+<section id="overview">
+    <h2>Genel bakış</h2>
+    <p><b>SqlHarbor</b>, şirketinizdeki SQL Server veritabanlarından (<b>kaynak</b>) belirlediğiniz saatlerde veri toplar, bunları tek bir SQL Server'da (<b>hedef</b>, genelde DWH)
+       tablolara yazar, istediğiniz süre kadar saklar ve isterseniz her gece <b>Google Cloud Storage (GCS)</b>'e dosya olarak gönderir.</p>
+    <p>Üç temel kavram var:</p>
+    <ul>
+        <li><b>Extract job</b> – "şu kaynaktaki şu tabloyu, şu saatte, şu hedef tabloya kopyala" tanımıdır.</li>
+        <li><b>Export job</b> – "toplanan veriyi CSV veya Parquet dosyası olarak GCS'e gönder" tanımıdır.</li>
+        <li><b>Retention (saklama süresi)</b> – hedefteki eski veriyi N gün sonra otomatik siler.</li>
+    </ul>
+    <p>Teknik ad <i>SqlDataCollector</i>'dır: Windows servisi, klasörler ve veritabanı nesneleri bu adı taşır.</p>
+</section>
+
+<section id="quick-start">
+    <h2>Hızlı başlangıç</h2>
+    <ol>
+        <li><b>İlk giriş:</b> kurulumdan sonra sunucunun kendisinde <code>https://localhost</code> adresini açın ve <b>Local administrator</b> ile yeni bir şifre belirleyin.
+            Hazır (varsayılan) şifre yoktur; bu ekran yalnızca sunucunun kendisinden açılabilir.</li>
+        <li><b>Settings:</b> Google Cloud servis hesabı anahtarını (JSON) yükleyin. Kurumsal HTTPS sertifikanız varsa onu da buradan yükleyin.</li>
+        <li><b>Servers:</b> kaynak ve hedef SQL Server'ları ekleyin, <b>Test</b> ile bağlantıyı deneyin.</li>
+        <li><b>Permissions:</b> AD gruplarına rol verin (Admin, Editor, Viewer) ve Editor'ların hangi sunucu ve veritabanlarını kullanabileceğini belirleyin.</li>
+        <li><b>Extract Jobs → New job:</b> kaynağı seçin → <b>Preview</b> ile veriye bakın → hedefi seçin → yükleme modunu ve zamanlamayı seçin → <b>Save</b>.</li>
+        <li><b>GCS Exports → New export:</b> hedef veritabanını, <b>All collected tables</b> modunu, bucket'ı ve gece saatini seçin.</li>
+        <li><b>Status</b> ve <b>Run history</b> sayfalarından takip edin. Hemen denemek için job sayfasında <b>Run now</b>'a basın.</li>
+    </ol>
+</section>
+
+<section id="ornekler">
+    <h2>Adım adım örnekler</h2>
+
+    <h3>1. Bir tabloyu her gece DWH'ye almak</h3>
+    <ol>
+        <li><b>Extract Jobs → New job</b>. <b>Source server</b> ve <b>Source database</b> seçin, listeden tabloyu işaretleyin.</li>
+        <li><b>Preview</b> ile ilk 50 satıra bakın.</li>
+        <li><b>Target server / database</b> seçin. <b>Target schema</b> kaynak veritabanı adından otomatik dolar (ERP → <code>erp</code>); tablo adı kaynaktakiyle aynı kalır.</li>
+        <li><b>Load mode</b>: tablonun her gün güncel hâlini istiyorsanız <b>Replace</b> veya <b>Merge</b>, geçmişi biriktirmek istiyorsanız <b>Append</b> (aşağıdaki "Yükleme modları"na bakın).</li>
+        <li><b>4 · Trigger</b> bölümünde <b>Preset</b> listesinden "Every night at 02:00"ı seçin.</li>
+        <li><b>Save and run now</b> ile kaydedip hemen bir kez çalıştırın; sonucu <b>Run history</b>'de görün.</li>
+    </ol>
+
+    <h3>2. Toplanan her şeyi her gece GCS'e göndermek</h3>
+    <ol>
+        <li><b>GCS Exports → New export</b>. Sunucu olarak hedef sunucuyu, veritabanı olarak DWH'yi seçin.</li>
+        <li>Mod: <b>All collected tables</b>. Her tablo için ayrı bir dosya seti oluşur ve yalnızca son export'tan bu yana toplanan veri gider.</li>
+        <li><b>Bucket</b> adını yazın. Dosya adı şablonunu olduğu gibi bırakabilirsiniz.</li>
+        <li><b>3 · File format</b>: Excel veya genel kullanım için <b>CSV</b>; BigQuery, Spark veya pandas için daha küçük ve tipli <b>Parquet</b>.</li>
+        <li><b>4 · Trigger</b>: saat vermek yerine <b>After other jobs</b> seçip extract job'larınızı işaretleyin. Export, extract'ler bitince kendiliğinden başlar.</li>
+    </ol>
+
+    <h3>3. Kişisel verinin buluta açık gitmesini engellemek</h3>
+    <ol>
+        <li><b>Data protection</b> sayfasında (yalnızca Admin) <b>Scan</b> ile DWH'yi tarayın. E-posta, TCKN, IBAN, telefon içeren kolonlar listelenir.</li>
+        <li>Her satırdaki <b>Create rule</b> ile kural oluşturun: e-posta için <b>Email</b>, TCKN için <b>Hash</b>, IBAN için <b>Partial</b>.</li>
+        <li><b>Export guard</b>'ı <b>Block</b> yaparsanız kuralı olmayan kişisel veri bulunan dosyalar hiç yüklenmez.</li>
+    </ol>
+
+    <h3>4. Verinin eksiksiz geldiğinden emin olmak</h3>
+    <ol>
+        <li>Her yükleme ve her export'ta satır sayıları zaten otomatik karşılaştırılır (bkz. "Bütünlük ve tutarlı okuma").</li>
+        <li>Ek güvence için job formunun <b>5 · Data quality</b> bölümüne <b>Minimum rows per load</b> (boş yükleme olmasın) ve
+            <b>Row count matches the source</b> (kaynakla aynı sayı) kontrollerini ekleyin.</li>
+        <li>İşlem yoğun kaynaklarda <b>1 · Source</b> bölümünde <b>Read a consistent snapshot</b> seçeneğini açın.</li>
+    </ol>
+</section>
+
+<section id="sss">
+    <h2>Sık sorulan sorular</h2>
+    <dl>
+        <dt>Kaynakta ne varsa CSV'de de o mu olur?</dt>
+        <dd>Evet. SqlHarbor veriyi değiştirmeden taşır ve her adımda satır sayılarını otomatik doğrular. Veriyi değiştiren tek özellik, sizin tanımladığınız maskeleme kurallarıdır.</dd>
+
+        <dt>Replace mi, Merge mi, Append mi?</dt>
+        <dd>Tablonun yalnızca bugünkü hâli lazımsa küçük tablolarda <b>Replace</b>, büyük tablolarda <b>Merge</b>. Her günün fotoğrafını saklamak istiyorsanız <b>Append</b>.
+            Yalnızca yeni ve değişen satırları eklemek (geçmişiyle birlikte) için <b>Incremental</b>.</dd>
+
+        <dt>Job çalışmadı, neden?</dt>
+        <dd>En sık neden çalışan bir Worker olmamasıdır: <b>Status</b> sayfasında "Workers online" 0 ise servis durmuştur. Ayrıca job <b>Active</b> olmalıdır;
+            "After other jobs" ile tetiklenen bir job'ın beklediği bütün job'ların başarıyla bitmiş olması gerekir.</dd>
+
+        <dt>Kalite kontrolü veriyi değiştirir mi?</dt>
+        <dd>Hayır. Yalnızca kontrol eder ve haber verir. <b>Error</b> seviyesinde, bu job'dan sonra çalışan export'u bekletir; böylece hatalı veri GCS'e gitmez.</dd>
+
+        <dt>Bir job hata alırsa yarım veri kalır mı?</dt>
+        <dd>Hayır. Başarısız bir yüklemenin yazdığı satırlar silinir; Merge ve Rebuild tek adımda (transaction) çalışır, yarım kalmaz.</dd>
+
+        <dt>Şifreler nerede saklanıyor?</dt>
+        <dd>SQL şifresi saklanmaz; bağlantılar servisin Windows hesabıyla yapılır. GCS anahtarı veritabanında şifreli durur.</dd>
+    </dl>
+</section>
+
+<section id="architecture">
+    <h2>Nasıl çalışır: Web ve Worker</h2>
+    <p>Uygulama iki parçadan oluşur. İkisi aynı sunucuda da çalışabilir, ayrı sunucularda da:</p>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Parça</th><th>Ne yapar</th></tr></thead>
+        <tbody>
+            <tr><td><b>Web</b></td><td>Bu ekranlar. Job tanımlarını ve zamanlamaları kaydeder. Kendisi veri taşımaz.</td></tr>
+            <tr><td><b>Worker</b></td><td>Arka planda çalışan Windows servisi (Hangfire). Zamanı gelen job'ları çalıştırır ve veriyi taşır.</td></tr>
+        </tbody>
+    </table>
+    <p><b>Save</b>'e bastığınızda job tanımı veritabanına yazılır ve zamanlayıcıya (Hangfire) "her gece 02:00'de 5 numaralı job'ı çalıştır" kaydı eklenir.
+       Saat gelince Worker bu kaydı görür, job tanımını okur ve veriyi taşır.</p>
+    <ul>
+        <li><b>Kuyruklar:</b> extract'ler <code>sdc_extract</code>, export'lar <code>sdc_export</code>, sistem işleri <code>sdc_system</code> kuyruğunda çalışır.
+            Örneğin export'lar için hedef SQL Server'ın üzerine ayrı bir Worker kurulabilir; dosyalar orada yazılır ve oradan yüklenir.</li>
+        <li><b>Kurulum tipleri:</b> <i>Embedded</i> (her şey tek sunucuda) veya <i>Central</i> (kurumun ortak Hangfire veritabanı).</li>
+        <li><b>Status</b> sayfası çalışan Worker'ları gösterir. Hiç Worker yoksa job'lar kuyrukta bekler.</li>
+    </ul>
+</section>
+
+<section id="extract">
+    <h2>Extract job'ları (veri toplama)</h2>
+    <p>Bir extract job kaynaktan okur ve hedef tabloya yazar. Veri bellekte tutulmadan, akış hâlinde ve hızlı biçimde (SqlBulkCopy) kopyalanır.</p>
+    <p>Her hedef tabloya dört teknik kolon eklenir:</p>
+    <table class="table table-sm table-bordered bg-white">
+        <tbody>
+            <tr><td class="mono">_LoadId</td><td>Hangi yüklemeyle geldiği (her çalıştırmada artar).</td></tr>
+            <tr><td class="mono">_LoadedAt</td><td>Yükleme zamanı (UTC). Saklama süresi buna göre işler.</td></tr>
+            <tr><td class="mono">_ExtractJobId</td><td>Satırı yazan job.</td></tr>
+            <tr><td class="mono">_SourceServer</td><td>Kaynak sunucunun adı.</td></tr>
+        </tbody>
+    </table>
+    <p>Bir çalıştırma hata alırsa yazdığı satırlar geri silinir. Worker yükleme sırasında kapanırsa yarım kalan yükleme bir sonraki kontrolde temizlenir.</p>
+</section>
+
+<section id="extract-source">
+    <h2>Kaynağı seçmek</h2>
+    <ul>
+        <li><b>Table / view:</b> bir veya birden fazla tablo seçin. Birden fazla tablo seçerseniz her tablo için ayrı bir job oluşur; hedefte tablo adları aynı kalır.
+            Tek tabloda kolon seçebilir, filtre yazabilirsiniz (<code>WHERE</code> kelimesi olmadan, örn. <code>Status &lt;&gt; 'D'</code>).</li>
+        <li><b>SQL query / procedure:</b> sonuç döndüren her sorgu olur; CTE, geçici tablo, <code>EXEC dbo.usp_Rapor</code> dahil.</li>
+        <li><b>Preview:</b> sorguyu çalıştırıp ilk 50 satırı ve kolon tiplerini gösterir.</li>
+        <li><b>WITH (NOLOCK)</b> kaynağı kilitlemeden okur ama yoğun tabloda satır atlayabilir ya da iki kez okuyabilir. Bunun yerine <b>Read a consistent snapshot</b> önerilir.</li>
+    </ul>
+    <p>Listede yalnızca kullanma yetkiniz olan sunucu ve veritabanları görünür.</p>
+</section>
+
+<section id="extract-target">
+    <h2>Hedef tablo ve şema kuralı</h2>
+    <p><b>Target schema</b> kaynak veritabanı adından otomatik dolar (<code>ERP</code> → <code>erp</code>). Her kaynağın ayrı şemada durması, farklı kaynaklardaki aynı adlı tabloların
+       çakışmasını önler (<code>ERP.dbo.Customers</code> ile <code>CRM.dbo.Customers</code>).</p>
+    <p><b>Check target</b> kaydetmeden önce kaynak ile hedef tabloyu karşılaştırır: tablo yoksa ilk çalıştırmada oluşturulur, varsa farklar tek tek listelenir.</p>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Kural</th><th>Davranış</th></tr></thead>
+        <tbody>
+            <tr><td><b>Strict</b> (varsayılan)</td><td>Tablo yoksa oluşturur. Varsa birebir aynı olmalıdır; değilse job durur ve farkı söyler.</td></tr>
+            <tr><td><b>Evolve</b></td><td>Kaynağa yeni eklenen kolonları hedefe de ekler, kısa kalan metin kolonlarını genişletir. Tip değişikliğinde yine durur.</td></tr>
+        </tbody>
+    </table>
+</section>
+
+<section id="load-modes">
+    <h2>Yükleme modları</h2>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Mod</th><th>Her çalıştırmada ne olur</th><th>Ne zaman</th></tr></thead>
+        <tbody>
+            <tr><td><b>Append</b></td><td>Okunan bütün satırlar eklenir; eski yüklemeler saklama süresi dolana kadar durur.</td><td>Günlük fotoğraf, geçmiş takibi</td></tr>
+            <tr><td><b>Replace</b></td><td>Bütün tablo yeniden yüklenir; başarılı olunca eski yükleme silinir.</td><td>Küçük referans tabloları</td></tr>
+            <tr><td><b>Incremental</b></td><td>Yalnızca son çalıştırmadan beri değişen satırlar okunur (watermark kolonuna göre) ve eklenir.</td><td>Büyük, sürekli büyüyen tablolar</td></tr>
+            <tr><td><b>Merge</b></td><td>Anahtar kolona göre: değişen satır güncellenir, yeni satır eklenir. Her anahtar için tek satır kalır.</td><td>Müşteri, ürün, durumu değişen siparişler</td></tr>
+        </tbody>
+    </table>
+    <h3>Replace: sil veya yeniden kur</h3>
+    <ul>
+        <li><b>Varsayılan:</b> yeni yükleme eklenir, sonra eski yükleme silinir.</li>
+        <li><b>Rebuild the table and swap it in:</b> her seferinde yeni bir tablo doldurulur ve bir anda eskisinin yerine konur. Okuyanlar hiçbir zaman yarım tablo görmez.
+            Büyük tablolarda silme işleminden çok daha hızlıdır. Tablo her seferinde yeniden kurulduğu için yetkiyi tabloya değil şemaya verin.</li>
+    </ul>
+    <h3 id="merge">Merge (upsert)</h3>
+    <ul>
+        <li><b>Key columns</b> (anahtar kolonlar) satırı tanımlar; kaynak tablonun birincil anahtarı otomatik önerilir.</li>
+        <li>Değişmeyen satırlara dokunulmaz. Bu yüzden export'lar yalnızca gerçekten değişen satırları gönderir (örn. 5.000 müşteriden 25'i değiştiyse 25 satır).</li>
+        <li><b>Delete rows whose key the source no longer returns:</b> kaynakta silinen satırları hedefte de siler. Kaynak hiç satır döndürmezse güvenlik için silme yapılmaz.</li>
+        <li>Anahtar boş (NULL) ya da kaynakta iki kez geçiyorsa job durur ve hedefe dokunmaz. Run history'de <code>merge: +eklenen ~güncellenen -silinen</code> görünür.</li>
+    </ul>
+    <h3>Watermark nedir?</h3>
+    <p>Incremental ve Merge'de "en son nereye kadar okudum" bilgisidir. Genellikle <code>ModifiedAt</code> (değişiklik zamanı) veya <code>rowversion</code> kolonu kullanılır.
+       Her çalıştırmada yalnızca bu değerden büyük satırlar okunur. Job sayfasındaki <b>reset</b> ile bir sonraki çalıştırma her şeyi baştan okur.</p>
+</section>
+
+<section id="partitioning">
+    <h2>Günlük bölümleme</h2>
+    <p>Hedef tablo ilk oluşturulurken açılırsa tablo günlere bölünür. Saklama süresi dolan günler satır satır silinmek yerine bir anda boşaltılır;
+       çok büyük tablolarda hızlıdır ve log büyütmez. Zaten var olan tablolara etkisi yoktur.</p>
+</section>
+
+<section id="retention">
+    <h2>Saklama süresi (retention)</h2>
+    <p>Her gece (varsayılan 01:30) <b>Retention (days)</b> gününden eski satırlar silinir. Boş bırakılırsa veri süresiz saklanır (kurum politikası izin veriyorsa).</p>
+    <ul>
+        <li><b>Replace</b> ve <b>Merge</b> tablolarında saklama süresi yoktur: tablo zaten yalnızca güncel veriyi tutar.</li>
+        <li>Kurum genelinde varsayılan ve en fazla süre <b>Settings</b> sayfasından belirlenir.</li>
+        <li>Yalnızca uygulamanın oluşturduğu tablolar (teknik kolonlu) temizlenir; başka tablolara dokunulmaz.</li>
+    </ul>
+</section>
+
+<section id="export">
+    <h2>GCS export'ları</h2>
+    <p>Export job'ları DWH'deki veriyi dosyaya yazar ve Google Cloud Storage'a yükler. Yükleme yarıda kesilirse kaldığı yerden devam eder, hata alırsa tekrar dener
+       ve sonunda dosya boyutunu doğrular. Dosyalar önce Worker sunucusunun diskinde günlük klasörlere yazılır; istenirse sıkıştırılarak bir süre arşivde tutulur.</p>
+</section>
+
+<section id="export-modes">
+    <h2>Export modları</h2>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Mod</th><th>Ne gönderilir</th></tr></thead>
+        <tbody>
+            <tr><td><b>All collected tables</b></td><td>Veritabanındaki bütün toplanan tablolar, her tablo için ayrı dosya. Yalnızca son export'tan bu yana gelen veri gider:
+                gece çalıştırılırsa "bugün toplanan" demektir. Bir tablo hata alırsa diğerleri yine gider.</td></tr>
+            <tr><td><b>Single table, incremental</b></td><td>Tek tablonun son export'tan bu yana gelen verisi.</td></tr>
+            <tr><td><b>Single table, full</b></td><td>Tek tablonun tamamı, her seferinde.</td></tr>
+            <tr><td><b>Custom query</b></td><td>Yazdığınız SQL'in sonucu.</td></tr>
+        </tbody>
+    </table>
+    <p>Henüz bitmemiş bir yükleme asla yarım gönderilmez; bir sonraki export'a kalır. Export okumaları salt okunur bir kullanıcıyla yapılır, sorgular veri değiştiremez.</p>
+</section>
+
+<section id="gcs">
+    <h2>GCS ayarları ve dosya adları</h2>
+    <p>Sunucuya Google aracı kurmak gerekmez. Google Cloud'da bir <b>servis hesabı</b> oluşturun, bucket üzerinde <i>Storage Object Creator</i> yetkisi verin
+       ve JSON anahtarını <b>Settings</b> sayfasından yükleyin. API key ile GCS'e yazılamaz.</p>
+    <p>Dosya adı şablonundaki değişkenler:</p>
+    <table class="table table-sm table-bordered bg-white">
+        <tbody>
+            <tr><td class="mono">{Name}</td><td>job adı</td></tr>
+            <tr><td class="mono">{Database} {Schema} {Table}</td><td>verinin geldiği tablo</td></tr>
+            <tr><td class="mono">{Date} {DateCompact} {Time}</td><td>2026-11-21 / 20261121 / 010000</td></tr>
+            <tr><td class="mono">{Part}</td><td>dosya parçası: 0001, 0002 …</td></tr>
+        </tbody>
+    </table>
+    <p>Varsayılan şablon dosyaları tablo ve gün klasörlerine ayırır (<code>…/erp.Customers/dt=2026-11-21/…</code>); BigQuery bu yapıyı tanır.</p>
+</section>
+
+<section id="csv-format">
+    <h2>Dosya formatları: CSV ve Parquet</h2>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th></th><th>CSV</th><th>Parquet</th></tr></thead>
+        <tbody>
+            <tr><td>Kim için</td><td>Excel, genel kullanım, eski sistemler</td><td>BigQuery, Spark, Databricks, pandas</td></tr>
+            <tr><td>Boyut</td><td>Büyük (istenirse gzip)</td><td>Yaklaşık 7 kat küçük (dosya içinde sıkıştırılmış)</td></tr>
+            <tr><td>Tipler</td><td>Her şey metin</td><td>Sayı, tarih, decimal tipleri korunur</td></tr>
+        </tbody>
+    </table>
+    <ul>
+        <li><b>CSV:</b> standart biçimdedir (RFC 4180). İçinde virgül, tırnak veya satır sonu olan değerler tırnak içine alınır. NULL ile boş metin ayrı yazılır.</li>
+        <li><b>Parquet:</b> varsayılan sıkıştırma <b>Snappy</b>'dir; daha küçük dosya için <b>Zstd</b> seçilebilir. Decimal değerler 38 haneye kadar birebir korunur.</li>
+        <li><b>Max rows per file</b> büyük tabloları birden fazla dosyaya böler.</li>
+    </ul>
+</section>
+
+<section id="cron">
+    <h2>Zamanlama (cron)</h2>
+    <p>Çoğu zaman <b>Preset</b> listesinden seçmek yeterlidir. Kendiniz yazmak isterseniz beş alan vardır: <code>dakika saat gün ay haftanın-günü</code>.
+       Form bir sonraki 5 çalışma zamanını gösterir.</p>
+    <table class="table table-sm table-bordered bg-white">
+        <tbody>
+            <tr><td class="mono">0 2 * * *</td><td>her gece 02:00</td></tr>
+            <tr><td class="mono">*/15 * * * *</td><td>her 15 dakikada bir</td></tr>
+            <tr><td class="mono">0 7 * * 1-5</td><td>hafta içi her gün 07:00</td></tr>
+            <tr><td class="mono">30 0 1 * *</td><td>her ayın 1'i, 00:30</td></tr>
+        </tbody>
+    </table>
+    <p>Bir job aynı anda iki kez çalışmaz; önceki çalıştırma sürüyorsa yeni tetikleme atlanır.</p>
+</section>
+
+<section id="dependencies">
+    <h2>Job bağımlılıkları</h2>
+    <p>Bir job'ı saat yerine başka job'lara bağlayabilirsiniz: <b>4 · Trigger</b> bölümünde <b>After other jobs</b> seçip beklenecek job'ları işaretleyin.
+       Seçilen <b>bütün</b> job'lar başarıyla bitince job kendiliğinden başlar.</p>
+    <ul>
+        <li>Tipik kullanım: "bütün extract'ler bitince gece export'u başlasın". Bu sayede "extract 00:30'da biter herhalde, export'u 01:00'e koyayım" tahminine gerek kalmaz.</li>
+        <li>Beklenen job'lardan biri hata alırsa bağımlı job bekler; o job başarıyla bitince başlar.</li>
+        <li>Döngü kurulamaz (A, B'den sonra; B, A'dan sonra). Listelerde bu job'lar <span class="badge bg-light text-dark border">after</span> ile gösterilir.</li>
+    </ul>
+</section>
+
+<section id="quality">
+    <h2>Veri kalitesi kontrolleri</h2>
+    <p>Kontroller veriyi <b>değiştirmez</b>; yalnızca her yüklemeden sonra kontrol eder ve sorun varsa haber verir. Job formunun <b>5 · Data quality</b> bölümünden eklenir.</p>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Kontrol</th><th>Ne yakalar</th></tr></thead>
+        <tbody>
+            <tr><td><b>Minimum rows per load</b></td><td>Boş veya çok az gelen yükleme (bağlantı sorunu, yanlış filtre).</td></tr>
+            <tr><td><b>Row count change</b></td><td>Satır sayısında ani değişiklik (her gün 450 bin gelirken bugün 80 bin gelmesi).</td></tr>
+            <tr><td><b>Row count matches the source</b></td><td>Kaynakla hedefin satır sayısı aynı mı (mutabakat).</td></tr>
+            <tr><td><b>NULL share</b></td><td>Dolu olması gereken bir kolonun boş gelmesi.</td></tr>
+            <tr><td><b>Duplicate keys</b></td><td>Aynı anahtarın iki kez gelmesi.</td></tr>
+            <tr><td><b>Custom SQL</b></td><td>İş kuralları, örn. "negatif tutar olmaz": <code>SELECT COUNT(*) FROM {Table} WHERE _LoadId = @@LoadId AND Amount &lt; 0</code> sonucu <code>= 0</code> olmalı.</td></tr>
+        </tbody>
+    </table>
+    <ul>
+        <li><b>Warning</b> seviyesi yalnızca uyarır. <b>Error</b> seviyesinde, bu job'dan sonra çalışan job'lar (örn. export) job'ın <b>son</b> yüklemesi kontrolden geçene kadar bekler;
+            böylece hatalı veri GCS'e gitmez.</li>
+        <li>Sonuçlar job sayfasında, <b>Data quality</b> sayfasında ve Run history'deki <i>quality</i> rozetinde görünür; sorunlarda alarm gider.</li>
+        <li><b>Tazelik:</b> "N saattir sağlıklı yükleme yok" alarmı için job formuna saat yazın.</li>
+    </ul>
+</section>
+
+<section id="consistency">
+    <h2>Bütünlük ve tutarlı okuma</h2>
+    <p>"Kaynakta ne varsa CSV'de de o" ilkesi her çalıştırmada otomatik doğrulanır; ayar gerekmez:</p>
+    <ul>
+        <li><b>Her yüklemede:</b> kaynaktan okunan satır sayısı = hedefe yazılan satır sayısı. Fark varsa yükleme geri alınır ve job hata verir.</li>
+        <li><b>Her export'ta:</b> DWH'den okunan satır sayısı = dosyalardaki satır sayısı (dosyalar yeniden okunarak sayılır). Fark varsa hiçbir şey yüklenmez.
+            Yüklemeden sonra her dosyanın boyutu GCS'te ayrıca kontrol edilir.</li>
+    </ul>
+    <h3>Tutarlı anlık görüntü (snapshot)</h3>
+    <p>İşlemlerin sürdüğü bir kaynak, okunurken değişir. <b>Read a consistent snapshot</b> açıkken kaynak tek bir anın fotoğrafı gibi okunur:
+       hiçbir satır atlanmaz, iki kez okunmaz, kaynak da kilitlenmez. DBA'nın kaynak veritabanında bir kez şu komutu çalıştırması gerekir:</p>
+    <p><code>ALTER DATABASE [ERP] SET ALLOW_SNAPSHOT_ISOLATION ON;</code></p>
+    <p>Job formu bu iznin açık olup olmadığını gösterir.</p>
+    <h3>Kaynak sayısı kontrolü ve değişen kaynak</h3>
+    <p><b>Row count matches the source</b> kontrolü kaynağı yükleme bittikten sonra yeniden sayar. Arada kaynağa yeni satır girerse sayılar farklı çıkar.
+       Bunu önlemek için <b>cutoff column</b> olarak artan bir ID veya kayıt zamanı kolonu verin: yalnızca okunan en büyük değere kadar olan satırlar sayılır.</p>
+</section>
+
+<section id="servers">
+    <h2>Sunucular ve servis hesapları</h2>
+    <ul>
+        <li>SQL şifresi saklanmaz. Bağlantılar, servisin çalıştığı Windows hesabıyla yapılır (gMSA önerilir).</li>
+        <li><b>Worker hesabı:</b> kaynakta yalnızca <b>okuma</b>; hedef veritabanında yazma ve tablo oluşturma yetkisi.</li>
+        <li><b>Web hesabı:</b> kaynakta ve hedefte okuma (listeler, önizleme), metadata veritabanında okuma ve yazma.</li>
+        <li><b>Export reader:</b> export'ların kullandığı, girişi olmayan salt okunur veritabanı kullanıcısı (<code>sdc_export_reader</code>).</li>
+        <li>Gerekli yetkilerin DBA betiği: <code>sql/01_permissions_template.sql</code>. Kontrol için <b>Servers</b> sayfasında <b>Check permissions</b>.</li>
+    </ul>
+</section>
+
+<section id="servers-system">
+    <h2>Sistem veritabanları</h2>
+    <p>Metadata veritabanı (job tanımları, geçmiş) ve Hangfire veritabanı (zamanlayıcı) uygulamanın açılması için gereklidir. Bu yüzden ekrandan değil,
+       her sunucudaki ayar dosyasından (appsettings) değiştirilir ve servis yeniden başlatılır. <b>Servers</b> sayfasında yalnızca görüntülenirler.</p>
+</section>
+
+<section id="settings">
+    <h2>Ayarlar: saklama ve temizlik</h2>
+    <ul>
+        <li><b>Default retention / Maximum retention:</b> yeni job'ların varsayılan saklama süresi ve izin verilen en uzun süre.</li>
+        <li><b>Allow keep forever:</b> kapalıysa her job'ın bir saklama süresi olmak zorundadır.</li>
+        <li><b>Editors may change the retention:</b> kapalıysa saklama süresini yalnızca Admin değiştirebilir.</li>
+        <li>Saklama işinin saati, çalıştırma geçmişinin ve audit kayıtlarının ne kadar tutulacağı.</li>
+        <li><b>Orphaned collector tables:</b> job'ı silinmiş, sahipsiz kalmış tablolar listelenir. Otomatik silinmez.</li>
+    </ul>
+    <p>Değişiklikler hemen geçerli olur, servis yeniden başlatılmaz; her değişiklik audit kaydına yazılır.</p>
+</section>
+
+<section id="https">
+    <h2>HTTPS sertifikası</h2>
+    <p>Kurulum geçici bir (self-signed) sertifika oluşturur; tarayıcı bunun için uyarı verir. Kurumsal sertifikanızı <b>Settings → HTTPS certificate</b> bölümünden yükleyin:
+       <code>.pfx</code>/<code>.p12</code> dosyası ve şifresi ya da Windows sertifika deposundan seçim. Yeniden başlatma gerekmez.
+       Süresinin dolmasına 30 gün kala Status sayfası uyarır ve alarm gider.</p>
+</section>
+
+<section id="installation">
+    <h2>Kurulum</h2>
+    <p><b>SqlHarbor-Setup.exe</b> tek dosyadır; uygulama, .NET ve kurulum sihirbazı içindedir. Sunucuya başka bir şey kurmak gerekmez (SQL Server ayrıdır).
+       Sunucu domain'e bağlı olmalıdır.</p>
+    <ol>
+        <li><b>Mod:</b> Embedded (her şey bu sunucuda) veya Central (kurumun ortak Hangfire veritabanı).</li>
+        <li><b>Servis hesabı:</b> domain hesabı veya gMSA; sihirbaz doğrular ve gerekli Windows hakkını verir.</li>
+        <li><b>Veritabanları:</b> hemen oluşturulabilir ya da betikler DBA için klasöre yazılır.</li>
+        <li><b>Web:</b> sunucu adı, HTTPS portu ve güvenlik duvarı kuralı.</li>
+        <li>Kurulum bitince <b>Open SqlHarbor</b> ile ilk giriş ekranı açılır.</li>
+    </ol>
+    <p>Kurulumu yeniden çalıştırmak uygulamayı günceller; ayarlar korunur.</p>
+</section>
+
+<section id="alerts">
+    <h2>Alarmlar</h2>
+    <p>Uygulama her dakika sorunları kontrol eder ve e-posta, Microsoft Teams veya webhook ile haber verir:</p>
+    <ul>
+        <li>Hata alan (<i>Failed</i>), kısmen başarısız (<i>PartiallyFailed</i>) ya da yarıda kalan (<i>Abandoned</i>) çalıştırmalar.</li>
+        <li>Zamanında başlamayan job'lar (<i>Missed</i>), çalışan Worker'ı olmayan kuyruklar (<i>NoServer</i>).</li>
+        <li>Kalite kontrolü sorunları (<i>QualityFailed</i>, <i>QualityWarning</i>) ve uzun süredir sağlıklı yükleme olmaması (<i>Stale</i>).</li>
+        <li>Hatadan sonra tekrar başarılı olan job'lar (<i>Recovered</i>).</li>
+    </ul>
+    <p><b>Alerts</b> sayfasından (Admin) kanal eklenir ve her kanalın hangi olaylarda haber alacağı seçilir. Job formundaki <b>Notify</b> alanına yazılan
+       e-posta adresleri, o job'ın sorunlarında doğrudan haber alır. Aynı sorun 60 dakika içinde tekrar gönderilmez.</p>
+</section>
+
+<section id="masking">
+    <h2>Veri koruma (maskeleme)</h2>
+    <p><b>Data protection</b> sayfasında (Admin) kişisel verinin nasıl gizleneceği tanımlanır. Kural, kolon adına göre çalışır (örn. <code>*Email*</code>)
+       ve isterseniz belirli bir veritabanı veya tabloyla sınırlanabilir.</p>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Yöntem</th><th>Sonuç</th><th>Ne için</th></tr></thead>
+        <tbody>
+            <tr><td><b>Hash</b></td><td>Geri çevrilemeyen bir kod. Aynı değer hep aynı kodu verir, bu yüzden tablolar yine birleştirilebilir.</td><td>TCKN, müşteri numarası</td></tr>
+            <tr><td><b>Partial</b></td><td>Yalnızca son karakterler görünür: <code>******1326</code></td><td>IBAN, kart, telefon</td></tr>
+            <tr><td><b>Email</b></td><td><code>a***@@firma.com</code></td><td>E-posta</td></tr>
+            <tr><td><b>Redact</b> / <b>Null</b></td><td><code>***</code> / boş</td><td>Not, adres gibi serbest metin</td></tr>
+        </tbody>
+    </table>
+    <ul>
+        <li><b>Exported files only:</b> DWH'de gerçek veri kalır, GCS'e giden dosyalarda maskelenir.</li>
+        <li><b>Already when collecting:</b> veri DWH'ye de maskeli yazılır.</li>
+        <li><b>Export guard:</b> her export'un ilk 500 satırında kuralı olmayan kişisel veri (e-posta, TCKN, IBAN, kart, telefon) aranır.
+            <b>Warn</b> uyarı yazar, <b>Block</b> dosyayı hiç yüklemez.</li>
+        <li><b>Scan:</b> DWH'deki tabloları tarar, kişisel veri içeren kolonları listeler ve tek tıkla kural oluşturur.</li>
+    </ul>
+</section>
+
+<section id="permission-check">
+    <h2>İzin kontrolü</h2>
+    <p><b>Servers</b> sayfasındaki <b>Check permissions</b>, servis hesaplarının yetkilerini olması gerekenle karşılaştırır. Veri okumaz veya yazmaz.</p>
+    <ul>
+        <li><span class="badge bg-success">Ok</span> her şey yerinde. <span class="badge bg-danger">Missing</span> eksik yetki var, job'lar hata alır.</li>
+        <li><span class="badge bg-warning text-dark">Excess</span> fazla yetki: özellikle kaynakta yazma yetkisi güvenlik riskidir; Editor'lar kaynakta SQL çalıştırabildiği için yalnızca okuma verin.</li>
+        <li>Test ortamında hesap <code>sysadmin</code> ise her yerde Excess görmek normaldir.</li>
+    </ul>
+</section>
+
+<section id="roles">
+    <h2>Roller ve yetkiler</h2>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Rol</th><th>Yapabildikleri</th></tr></thead>
+        <tbody>
+            <tr><td><b>Admin</b></td><td>Her şey: sunucular, yetkiler, bütün job'lar, ayarlar, veri koruma.</td></tr>
+            <tr><td><b>Editor</b></td><td>Kendisine izin verilen sunucu ve veritabanlarında job oluşturur, değiştirir, çalıştırır.</td></tr>
+            <tr><td><b>Viewer</b></td><td>Job'ları, durumu ve geçmişi görür; değiştiremez.</td></tr>
+        </tbody>
+    </table>
+    <p>Roller AD kullanıcılarına veya gruplarına <b>Permissions</b> sayfasından verilir; değişiklik en geç 10 dakikada geçerli olur.
+       Yerel <code>admin</code> hesabı ilk kurulum ve acil durumlar içindir.</p>
+</section>
+
+<section id="hangfire">
+    <h2>Hangfire paneli</h2>
+    <p>Menüdeki <b>Hangfire dashboard</b>, kuyrukları, çalışan ve hata alan işleri, tekrar denemeleri ve Worker'ları gösterir. Admin buradan bir işi yeniden çalıştırabilir;
+       diğer roller yalnızca görür. Job tanımları ve zamanlamalar ise yalnızca SqlHarbor ekranlarından değiştirilir.</p>
+</section>
+
+<section id="troubleshooting">
+    <h2>Durumlar ve sorun giderme</h2>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Durum</th><th>Anlamı</th></tr></thead>
+        <tbody>
+            <tr><td><span class="badge bg-success">Succeeded</span></td><td>Başarıyla bitti.</td></tr>
+            <tr><td><span class="badge bg-primary">Running</span></td><td>Çalışıyor.</td></tr>
+            <tr><td><span class="badge bg-danger">Failed</span></td><td>Hata aldı; otomatik tekrar denenir (extract 2, export 3 kez). Ayrıntı için satıra bakın.</td></tr>
+            <tr><td><span class="badge bg-warning text-dark">PartiallyFailed</span></td><td>Tüm tablolar export'unda bazı tablolar hata aldı, diğerleri gitti.</td></tr>
+            <tr><td><span class="badge bg-secondary">Skipped</span></td><td>Gönderilecek yeni veri yoktu.</td></tr>
+            <tr><td><span class="badge bg-warning text-dark">Abandoned</span></td><td>Çalışırken Worker kapandı; yarım veri temizlendi.</td></tr>
+            <tr><td><span class="badge bg-danger">CleanupPending</span></td><td>Hatalı yükleme henüz temizlenemedi; sistem tekrar deneyecek.</td></tr>
+        </tbody>
+    </table>
+    <h3>Sık görülen hatalar</h3>
+    <ul>
+        <li><b>Strict schema policy: target … does not match</b> – hedef tablo kaynakla aynı değil. <b>Check target</b> ile farka bakın; tabloyu düzeltin ya da <b>Evolve</b> seçin.</li>
+        <li><b>Integrity check failed</b> – okunan ve yazılan satır sayısı tutmadı; yükleme geri alındı. Tekrar çalıştırın; sürerse BT ekibine haber verin.</li>
+        <li><b>Snapshot reads are not allowed</b> – DBA'nın kaynakta snapshot iznini açması gerekir (bkz. "Bütünlük ve tutarlı okuma").</li>
+        <li><b>Login failed / cannot open database</b> – servis hesabının o sunucuda veya veritabanında yetkisi yok.</li>
+        <li><b>Job'lar hiç başlamıyor</b> – çalışan Worker yok veya job'ın kuyruğunu dinlemiyor (Status sayfası).</li>
+    </ul>
+</section>

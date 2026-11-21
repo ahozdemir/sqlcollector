@@ -99,6 +99,17 @@ public sealed class CatalogService(SqlConnectionFactory factory, MetadataReposit
         return (tables, errors);
     }
 
+    /// <summary>Whether SNAPSHOT isolation reads are allowed in a database (ALLOW_SNAPSHOT_ISOLATION ON).</summary>
+    public async Task<bool> SnapshotAllowedAsync(int serverId, string database, CancellationToken ct = default)
+    {
+        await using var c = await factory.OpenAsync(await ServerAsync(serverId), "master", forWrite: false, ct);
+        await using var cmd = c.CreateCommand();
+        cmd.CommandTimeout = UiTimeoutSec;
+        cmd.CommandText = "SELECT snapshot_isolation_state FROM sys.databases WHERE name = @db;";
+        cmd.Parameters.AddWithValue("@db", database);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct) ?? 0) == 1;
+    }
+
     public async Task<IReadOnlyList<string>> DatabasesAsync(int serverId, CancellationToken ct = default)
     {
         await using var c = await factory.OpenAsync(await ServerAsync(serverId), "master", forWrite: false, ct);

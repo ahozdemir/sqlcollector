@@ -47,6 +47,7 @@ public sealed class ExtractJobDef
     public string? FilterClause { get; set; }
     public string? SourceQuery { get; set; }
     public bool UseNoLock { get; set; }
+    public bool ReadSnapshot { get; set; }   // read inside a SNAPSHOT transaction (consistent point in time)
     public LoadMode LoadMode { get; set; } = LoadMode.Append;
     public string? WatermarkColumn { get; set; }
     public SchemaPolicy SchemaPolicy { get; set; } = SchemaPolicy.Strict;
@@ -64,6 +65,7 @@ public sealed class ExtractJobDef
     public bool ReplaceRebuild { get; set; }   // Replace: rebuild the table and swap it in
     public string? KeyColumns { get; set; }    // Merge: key column names (comma separated); nullable in DB: no default
     public bool MergeDeleteMissing { get; set; }   // Merge: delete rows missing from a full read
+    public int? FreshnessHours { get; set; }   // alert when no successful load for this many hours (nullable: no default)
     public JobTriggerMode TriggerMode { get; set; } = JobTriggerMode.Schedule;
     public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
     public bool IsActive { get; set; } = true;
@@ -151,6 +153,7 @@ public sealed class RunRow
     public long? Rows { get; set; }
     public string? Detail { get; set; }
     public string? ErrorMessage { get; set; }
+    public string? QualityStatus { get; set; }
 }
 
 public sealed class JobStatusRow
@@ -249,3 +252,46 @@ public static class ExtractJobRules
 
 /// <summary>Rows a merge inserted, updated (changed values only) and deleted.</summary>
 public sealed record MergeCounts(long Inserted, long Updated, long Deleted);
+
+public static class QualityCheckTypes
+{
+    public const string MinRows = "MinRows", RowChange = "RowChange", SourceCount = "SourceCount",
+        NullRate = "NullRate", Duplicates = "Duplicates", CustomSql = "CustomSql";
+    public static readonly string[] All = [MinRows, RowChange, SourceCount, NullRate, Duplicates, CustomSql];
+}
+
+/// <summary>etl.QualityCheck: a data quality check of an extract job, run after every successful load.</summary>
+public sealed class QualityCheckDef
+{
+    public int QualityCheckId { get; set; }
+    public int ExtractJobId { get; set; }
+    public string CheckType { get; set; } = QualityCheckTypes.MinRows;
+    public string? ColumnName { get; set; }   // nullable in DB: no default
+    public decimal? Threshold { get; set; }
+    public string? Operator { get; set; }
+    public string? SqlText { get; set; }
+    public string Scope { get; set; } = "Load";
+    public string Severity { get; set; } = "Error";
+    public bool IsActive { get; set; } = true;
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+}
+
+/// <summary>etl.QualityResult: outcome of one check for one load.</summary>
+public sealed class QualityResultRow
+{
+    public long QualityResultId { get; set; }
+    public int QualityCheckId { get; set; }
+    public int ExtractJobId { get; set; }
+    public long LoadRunId { get; set; }
+    public DateTime CheckedAtUtc { get; set; }
+    public string Status { get; set; } = "";
+    public decimal? Measured { get; set; }
+    public string? Expected { get; set; }
+    public string? Message { get; set; }
+    // joined for display
+    public string? JobName { get; set; }
+    public string? CheckType { get; set; }
+    public string? ColumnName { get; set; }
+    public string? Severity { get; set; }
+}
