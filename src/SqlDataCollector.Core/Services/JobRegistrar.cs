@@ -23,7 +23,7 @@ public sealed class JobRegistrar(IRecurringJobManager recurring, IBackgroundJobC
     public void Register(ExtractJobDef j)
     {
         var id = ExtractId(j.ExtractJobId);
-        if (!j.IsActive) { recurring.RemoveIfExists(id); return; }
+        if (!j.IsActive || j.TriggerMode == JobTriggerMode.AfterJobs) { recurring.RemoveIfExists(id); return; }   // AfterJobs: started by DependencyService
         int jobId = j.ExtractJobId; string name = j.Name;
         recurring.AddOrUpdate<ExtractRunner>(id, CollectorQueues.Extract, r => r.RunAsync(jobId, name, null, CancellationToken.None),
             j.CronExpression, new RecurringJobOptions { TimeZone = TimeZones.Resolve(j.TimeZoneId) });
@@ -32,7 +32,7 @@ public sealed class JobRegistrar(IRecurringJobManager recurring, IBackgroundJobC
     public void Register(ExportJobDef e)
     {
         var id = ExportId(e.ExportJobId);
-        if (!e.IsActive) { recurring.RemoveIfExists(id); return; }
+        if (!e.IsActive || e.TriggerMode == JobTriggerMode.AfterJobs) { recurring.RemoveIfExists(id); return; }
         int jobId = e.ExportJobId; string name = e.Name;
         recurring.AddOrUpdate<ExportRunner>(id, CollectorQueues.Export, r => r.RunAsync(jobId, name, null, CancellationToken.None),
             e.CronExpression, new RecurringJobOptions { TimeZone = TimeZones.Resolve(e.TimeZoneId) });

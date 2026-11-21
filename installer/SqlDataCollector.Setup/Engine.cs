@@ -79,7 +79,7 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
         Do(() => Native.GrantLogonAsService(o.ServiceAccount), $"would grant SeServiceLogonRight to {o.ServiceAccount}");
 
         Step($"Registering the Windows service {o.ServiceName}");
-        Do(() => Native.CreateOrUpdateService(o.ServiceName, "SqlDataCollector", AppExe, o.ServiceAccount, o.ManagedServiceAccount ? null : o.ServicePassword),
+        Do(() => Native.CreateOrUpdateService(o.ServiceName, "SqlHarbor", AppExe, o.ServiceAccount, o.ManagedServiceAccount ? null : o.ServicePassword),
             $"would create service {o.ServiceName} ({AppExe}) running as {o.ServiceAccount}");
         await RunAsync(ct, "sc.exe", "config", o.ServiceName, "start=", "delayed-auto");
         await RunAsync(ct, "sc.exe", "description", o.ServiceName, "Collects SQL Server data into the DWH and exports it to Google Cloud Storage.");
@@ -271,13 +271,13 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
 
     private void RegisterUninstall()
     {
-        var setupExe = Path.Combine(o.InstallDir, "setup", Path.GetFileName(Environment.ProcessPath ?? "SqlDataCollector-Setup.exe"));
+        var setupExe = Path.Combine(o.InstallDir, "setup", Path.GetFileName(Environment.ProcessPath ?? "SqlHarbor-Setup.exe"));
         Do(() =>
         {
             using var key = Registry.LocalMachine.CreateSubKey(UninstallKey);
-            key.SetValue("DisplayName", "SqlDataCollector");
+            key.SetValue("DisplayName", "SqlHarbor");
             key.SetValue("DisplayVersion", Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0");
-            key.SetValue("Publisher", "SqlDataCollector");
+            key.SetValue("Publisher", "SqlHarbor");
             key.SetValue("InstallLocation", o.InstallDir);
             key.SetValue("UninstallString", $"\"{setupExe}\" /uninstall");
             key.SetValue("NoModify", 1, RegistryValueKind.DWord);

@@ -292,7 +292,7 @@ if (collector.IsWeb)
     // Hangfire Dashboard (monitoring): full access for Admin, read-only for Editor/Viewer.
     app.MapHangfireDashboard(dashboard.Path, new DashboardOptions
     {
-        DashboardTitle = "SqlDataCollector – Hangfire",
+        DashboardTitle = "SqlHarbor – Hangfire",
         AppPath = "/",
         Authorization = [new AuthenticatedDashboardFilter()],
         IsReadOnlyFunc = ctx => !ctx.GetHttpContext().User.IsInRole(AppRoles.Admin)

@@ -1,0 +1,89 @@
+@* Trigger of a job: its cron schedule, or "after other jobs" (etl.JobDependency). The cron editor is rendered by the page as ChildContent. *@
+@inject MetadataRepository Repo
+
+<div class="btn-group btn-group-sm mb-2" role="group" aria-label="Trigger">
+    <input type="radio" class="btn-check" name="trigger-@Kind" id="trigger-schedule-@Kind" autocomplete="off"
+           checked="@(Mode == JobTriggerMode.Schedule)" disabled="@Disabled" @onchange="() => SetModeAsync(JobTriggerMode.Schedule)" />
+    <label class="btn btn-outline-secondary" for="trigger-schedule-@Kind">On a schedule</label>
+    <input type="radio" class="btn-check" name="trigger-@Kind" id="trigger-after-@Kind" autocomplete="off"
+           checked="@(Mode == JobTriggerMode.AfterJobs)" disabled="@Disabled" @onchange="() => SetModeAsync(JobTriggerMode.AfterJobs)" />
+    <label class="btn btn-outline-secondary" for="trigger-after-@Kind">After other jobs</label>
+</div>
+
+@if (Mode == JobTriggerMode.Schedule)
+{
+    @ChildContent
+}
+else
+{
+    <div class="small text-muted mb-2">
+        Starts automatically when <b>every</b> selected job has succeeded since this job was last started by them
+        (an export with nothing new, <i>Skipped</i>, counts as success). The cron schedule is not used. <HelpLink Topic="dependencies" Title="Job dependencies" />
+    </div>
+    <input class="form-control form-control-sm mb-1" placeholder="Filter jobs…" @bind="filter" @bind:event="oninput" disabled="@Disabled" />
+    <div class="border rounded p-2 bg-white" style="max-height: 230px; overflow-y: auto;">
+        @if (candidates.Count == 0) { <div class="small text-muted">No other jobs yet.</div> }
+        @foreach (var c in Filtered)
+        {
+            var id = $"up-{c.Ref.Kind}-{c.Ref.Id}-{Kind}";
+            <div class="form-check" @key="c.Ref">
+                <input class="form-check-input" type="checkbox" id="@id" checked="@Upstreams.Contains(c.Ref)" disabled="@Disabled"
+                       @onchange="e => Toggle(c.Ref, e.Value is true)" />
+                <label class="form-check-label small" for="@id">
+                    <span class="badge bg-light text-dark border me-1">@c.Ref.Kind</span>@c.Name
+                    @if (!c.Active) { <span class="text-muted"> (inactive – never succeeds)</span> }
+                    else if (c.AfterJobs) { <span class="text-muted"> (runs after other jobs)</span> }
+                </label>
+            </div>
+        }
+    </div>
+    <div class="small mt-1 @(Upstreams.Count == 0 ? "text-danger" : "text-muted")">
+        @(Upstreams.Count == 0 ? "Select at least one job." : $"{Upstreams.Count} job(s) selected: {string.Join(", ", SelectedNames)}")
+    </div>
+}
+
+@code {
+    /// <summary>"Extract" or "Export" – the kind of the edited job.</summary>
+    [Parameter, EditorRequired] public string Kind { get; set; } = "";
+    /// <summary>The edited job's id (0 for a new job); excluded from the candidates.</summary>
+    [Parameter] public int JobId { get; set; }
+    [Parameter] public JobTriggerMode Mode { get; set; }
+    [Parameter] public EventCallback<JobTriggerMode> ModeChanged { get; set; }
+    /// <summary>Selected upstream jobs; changed in place.</summary>
+    [Parameter, EditorRequired] public HashSet<JobRef> Upstreams { get; set; } = [];
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private sealed record Candidate(JobRef Ref, string Name, bool Active, bool AfterJobs);
+    private List<Candidate> candidates = [];
+    private string filter = "";
+
+    // the order is fixed when the page opens (selected first): re-sorting on every click would move rows under the mouse
+    private IEnumerable<Candidate> Filtered => candidates
+        .Where(c => string.IsNullOrWhiteSpace(filter) || Upstreams.Contains(c.Ref) || c.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<string> SelectedNames => candidates.Where(c => Upstreams.Contains(c.Ref)).Select(c => c.Name);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var self = new JobRef(Kind, JobId);
+        candidates = (await Repo.GetExtractJobsAsync())
+            .Select(j => new Candidate(new JobRef(JobRef.Extract, j.ExtractJobId), j.Name, j.IsActive, j.TriggerMode == JobTriggerMode.AfterJobs))
+            .Concat((await Repo.GetExportJobsAsync())
+                .Select(e => new Candidate(new JobRef(JobRef.Export, e.ExportJobId), e.Name, e.IsActive, e.TriggerMode == JobTriggerMode.AfterJobs)))
+            .Where(c => c.Ref != self)
+            .OrderByDescending(c => Upstreams.Contains(c.Ref)).ThenBy(c => c.Ref.Kind).ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private async Task SetModeAsync(JobTriggerMode mode)
+    {
+        Mode = mode;
+        await ModeChanged.InvokeAsync(mode);
+    }
+
+    private void Toggle(JobRef r, bool on)
+    {
+        if (on) Upstreams.Add(r); else Upstreams.Remove(r);
+    }
+}

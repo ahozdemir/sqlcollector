@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Hangfire;
 using Hangfire.SqlServer;
 using Microsoft.Data.SqlClient;
@@ -31,6 +32,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<GcsUploader>();
         services.AddSingleton<CatalogService>();
         services.AddSingleton<JobRegistrar>();
+        services.TryAddSingleton<IDependentJobLauncher, HangfireDependentJobLauncher>();
+        services.AddSingleton<DependencyService>();
         services.AddSingleton<PermissionChecker>();
         services.AddSingleton<SystemSettingsService>();
         services.Configure<Alerts.AlertOptions>(configuration.GetSection(Alerts.AlertOptions.Section));

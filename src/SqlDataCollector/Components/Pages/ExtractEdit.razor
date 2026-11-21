@@ -7,6 +7,7 @@
 @inject JobRegistrar Registrar
 @inject NavigationManager Nav
 @inject SystemSettingsService SettingsService
+@inject DependencyService Dependencies
 
 <PageTitle>@(IsNew ? "New extract job" : job.Name)</PageTitle>
 
@@ -287,8 +288,10 @@
         </div></div>
 
         <div class="card"><div class="card-body">
-            <div class="section-title mb-2">4 · Schedule <HelpLink Topic="cron" Title="Scheduling" /></div>
-            <CronEditor @bind-Cron="job.CronExpression" @bind-TimeZoneId="job.TimeZoneId" Disabled="@(!canEdit)" />
+            <div class="section-title mb-2">4 · Trigger <HelpLink Topic="cron" Title="Scheduling" /></div>
+            <TriggerEditor Kind="@JobRef.Extract" JobId="job.ExtractJobId" @bind-Mode="job.TriggerMode" Upstreams="upstreams" Disabled="@(!canEdit)">
+                <CronEditor @bind-Cron="job.CronExpression" @bind-TimeZoneId="job.TimeZoneId" Disabled="@(!canEdit)" />
+            </TriggerEditor>
             <div class="row g-2 mt-2">
                 <div class="col-md-8">
                     <label class="form-label small">@(MultiTable ? "Job name prefix (empty = db_schema_table)" : "Job name")</label>
@@ -334,6 +337,7 @@
     private bool loaded, canEdit, busy, confirmDelete, advancedColumns;
     private string? error, info;
     private ExtractState? state;
+    private readonly HashSet<JobRef> upstreams = [];   // "after other jobs" trigger
 
     private List<SqlServerDef> sourceServers = [], targetServers = [];
     private IReadOnlyList<string> sourceDbs = [], targetDbs = [], targetSchemas = [];
@@ -384,6 +388,8 @@
                 originalRetention = job.RetentionDays;
                 canEdit = await Access.CanEditExtractAsync(job);
                 state = await Repo.GetExtractStateAsync(job.ExtractJobId);
+                foreach (var d in (await Repo.GetJobDependenciesAsync()).Where(d => d.JobKind == JobRef.Extract && d.JobId == job.ExtractJobId))
+                    upstreams.Add(new JobRef(d.UpstreamKind, d.UpstreamId));
                 await EnsureServerVisible(sourceServers, job.SourceServerId);
                 await EnsureServerVisible(targetServers, job.TargetServerId);
                 await LoadSourceDbsAsync(keepSelection: true);
@@ -583,6 +589,8 @@
             if (job.LoadMode == LoadMode.Replace) job.RetentionDays = null;   // not applicable: only the latest load is kept
             if (currentPolicy.ValidateJob(job.RetentionDays, originalRetention, IsNew, await Access.IsAdminAsync(), job.LoadMode) is { } retentionError)
                 throw new InvalidOperationException(retentionError);
+            if (await Dependencies.ValidateAsync(new JobRef(JobRef.Extract, job.ExtractJobId), job.TriggerMode, upstreams) is { } dependencyError)
+                throw new InvalidOperationException(dependencyError);
 
             if (MultiTable)
             {
@@ -595,6 +603,7 @@
                     j.Name = string.IsNullOrWhiteSpace(job.Name) ? $"{job.SourceDatabase}_{t.Schema}_{t.Name}" : $"{job.Name.Trim()}_{j.TargetTable}";
                     await EnsureRebuildTargetIsFreeAsync(j);
                     await Repo.SaveExtractJobAsync(j, user);
+                    await Dependencies.SaveAsync(new JobRef(JobRef.Extract, j.ExtractJobId), j.TriggerMode, upstreams, user);
                     Registrar.Register(j);
                     if (runNow) Registrar.RunExtractNow(j, user);
                     created.Add(j.Name);
@@ -606,9 +615,10 @@
 
             await EnsureRebuildTargetIsFreeAsync(job);
             var id = await Repo.SaveExtractJobAsync(job, user);
+            await Dependencies.SaveAsync(new JobRef(JobRef.Extract, id), job.TriggerMode, upstreams, user);
             Registrar.Register(job);
             if (runNow) Registrar.RunExtractNow(job, user);
-            info = runNow ? "Saved and enqueued." : "Saved; the schedule was registered in Hangfire.";
+            info = (runNow ? "Saved and enqueued. " : "Saved. ") + (job.TriggerMode == JobTriggerMode.AfterJobs ? "It starts after the selected jobs have succeeded." : "The schedule was registered in Hangfire.");
             if (IsNew) Nav.NavigateTo($"/extract/{id}");
             else { job = (await Repo.GetExtractJobAsync(id))!; originalRetention = job.RetentionDays; }
         });
@@ -654,7 +664,7 @@
                 errs.Add($"Tables with the same name in different source schemas would write to the same target table ({string.Join(", ", dup)}). " +
                          "Select them in separate jobs with different target schemas.");
         }
-        if (!JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
+        if (job.TriggerMode == JobTriggerMode.Schedule && !JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
         if (job.BatchSize < 100) job.BatchSize = 10000;
         if (job.CommandTimeoutSec < 30) job.CommandTimeoutSec = 3600;
         if (job.SourceType == SourceType.Query) { job.SourceTable = null; job.ColumnList = null; job.FilterClause = null; }

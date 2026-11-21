@@ -203,7 +203,7 @@ IF DB_ID(N'$DwhDb') IS NOT NULL BEGIN ALTER DATABASE [$DwhDb] SET SINGLE_USER WI
         & dotnet run --project $AppProject --launch-profile LocalTest
     }
     'installer' {
-        # artifacts\installer\SqlDataCollector-Setup.exe: one self-contained file (application + .NET runtime + wizard)
+        # artifacts/installer/dist/SqlHarbor-Setup.exe: one self-contained file (application + .NET runtime + wizard)
         $out = Join-Path $Root 'artifacts/installer'
         $app = Join-Path $out 'app'
         $zip = Join-Path $out 'payload.zip'
@@ -216,11 +216,11 @@ IF DB_ID(N'$DwhDb') IS NOT NULL BEGIN ALTER DATABASE [$DwhDb] SET SINGLE_USER WI
         Remove-Item (Join-Path $app 'appsettings.LocalTest.json') -ErrorAction SilentlyContinue   # never ship the developer configuration
         Write-Step 'Packing payload.zip'
         Compress-Archive -Path (Join-Path $app '*') -DestinationPath $zip -CompressionLevel Optimal
-        Write-Step 'Publishing SqlDataCollector-Setup.exe (single file, self-contained, payload embedded)'
+        Write-Step 'Publishing SqlHarbor-Setup.exe (single file, self-contained, payload embedded)'
         & dotnet publish (Join-Path $Root 'installer/SqlDataCollector.Setup') -c Release -r win-x64 --self-contained true `
             -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:PayloadZip=$zip" @versionArgs -o (Join-Path $out 'dist')
         if ($LASTEXITCODE -ne 0) { throw 'dotnet publish of the setup failed' }
-        $exe = Get-Item (Join-Path $out 'dist/SqlDataCollector-Setup.exe')
+        $exe = Get-Item (Join-Path $out 'dist/SqlHarbor-Setup.exe')
         Write-Host ("Ready: {0} ({1:N0} MB)" -f $exe.FullName, ($exe.Length / 1MB)) -ForegroundColor Green
     }
     'run-job' {

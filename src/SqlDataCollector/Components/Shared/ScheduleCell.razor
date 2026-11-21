@@ -1,0 +1,26 @@
+@* Schedule column of job tables: the cron expression, or "after A, B" for jobs triggered by other jobs. *@
+@if (upstreamNames.Count > 0)
+{
+    <span class="small" title="Starts when all of these jobs have succeeded"><span class="badge bg-light text-dark border me-1">after</span>@string.Join(", ", upstreamNames)</span>
+}
+else if (AfterJobs)
+{
+    <span class="small text-danger">after other jobs (none selected)</span>
+}
+else
+{
+    <span class="mono">@Cron</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Kind { get; set; } = "";
+    [Parameter, EditorRequired] public int JobId { get; set; }
+    [Parameter] public string? Cron { get; set; }
+    [Parameter] public bool AfterJobs { get; set; }
+    [Parameter] public IReadOnlyList<JobDependencyRow> Dependencies { get; set; } = [];
+
+    private List<string> upstreamNames = [];
+
+    protected override void OnParametersSet() =>
+        upstreamNames = Dependencies.Where(d => d.JobKind == Kind && d.JobId == JobId).Select(d => d.UpstreamName ?? $"{d.UpstreamKind} #{d.UpstreamId}").ToList();
+}

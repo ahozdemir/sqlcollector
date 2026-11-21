@@ -1,4 +1,4 @@
-# Builds SqlDataCollector-Setup.exe and publishes it as a GitHub Release of THIS repository.
+# Builds SqlHarbor-Setup.exe and publishes it as a GitHub Release of THIS repository.
 #   Release:  git tag v1.0.0  &&  git push origin v1.0.0
 #   Test build without a release: Actions → "Release installer" → Run workflow (the exe is kept as a workflow artifact)
 # Runs on a GitHub-hosted Windows runner; uses only this repository's GITHUB_TOKEN (contents: write).
@@ -57,18 +57,18 @@ jobs:
       - name: Checksum
         shell: pwsh
         run: |
-          $exe = "artifacts/installer/dist/SqlDataCollector-Setup.exe"
+          $exe = "artifacts/installer/dist/SqlHarbor-Setup.exe"
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  SqlDataCollector-Setup.exe" | Set-Content "artifacts/installer/dist/SqlDataCollector-Setup.exe.sha256" -Encoding ascii
+          "$hash  SqlHarbor-Setup.exe" | Set-Content "artifacts/installer/dist/SqlHarbor-Setup.exe.sha256" -Encoding ascii
           Write-Host "SHA-256: $hash"
 
       - name: Keep the installer as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SqlDataCollector-Setup-${{ steps.version.outputs.version }}
+          name: SqlHarbor-Setup-${{ steps.version.outputs.version }}
           path: |
-            artifacts/installer/dist/SqlDataCollector-Setup.exe
-            artifacts/installer/dist/SqlDataCollector-Setup.exe.sha256
+            artifacts/installer/dist/SqlHarbor-Setup.exe
+            artifacts/installer/dist/SqlHarbor-Setup.exe.sha256
           retention-days: 14
 
       - name: Publish the GitHub release
@@ -78,17 +78,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $files = @("artifacts/installer/dist/SqlDataCollector-Setup.exe", "artifacts/installer/dist/SqlDataCollector-Setup.exe.sha256")
+          $files = @("artifacts/installer/dist/SqlHarbor-Setup.exe", "artifacts/installer/dist/SqlHarbor-Setup.exe.sha256")
           $notes = @"
-          Windows installer for SqlDataCollector $tag – one self-contained file (application, .NET runtime and setup wizard).
+          Windows installer for SqlHarbor $tag – one self-contained file (application, .NET runtime and setup wizard).
 
           **Requirements:** Windows Server joined to an Active Directory domain, a domain service account (or gMSA) and an existing SQL Server.
-          **Install:** run SqlDataCollector-Setup.exe as administrator; silent: ``/silent /config install.json /password-env SDC_PWD``.
-          **Verify:** compare the SHA-256 with SqlDataCollector-Setup.exe.sha256. The file is not code-signed: Windows SmartScreen may warn.
+          **Install:** run SqlHarbor-Setup.exe as administrator; silent: ``/silent /config install.json /password-env SDC_PWD``.
+          **Verify:** compare the SHA-256 with SqlHarbor-Setup.exe.sha256. The file is not code-signed: Windows SmartScreen may warn.
           "@
           gh release view $tag 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @files --clobber
           } else {
-            gh release create $tag @files --title "SqlDataCollector $tag" --notes $notes --generate-notes
+            gh release create $tag @files --title "SqlHarbor $tag" --notes $notes --generate-notes
           }

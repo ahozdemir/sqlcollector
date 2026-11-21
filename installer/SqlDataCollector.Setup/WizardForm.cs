@@ -44,18 +44,19 @@ internal sealed class WizardForm : Form
     private readonly TextBox _summary = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font("Consolas", 9) };
     private readonly TextBox _progress = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font("Consolas", 9) };
     private readonly Label _finish = new() { Dock = DockStyle.Top, Height = 160 };
-    private readonly CheckBox _openBrowser = new() { Text = "Open SqlDataCollector now", Checked = true, AutoSize = true, Top = 170 };
+    private readonly CheckBox _openBrowser = new() { Text = "Open SqlHarbor now", Checked = true, AutoSize = true, Top = 170 };
     private InstallResult? _result;
 
     public WizardForm(string? payload, bool dryRun, string logFile)
     {
         _payload = payload; _dryRun = dryRun; _logFile = logFile;
-        Text = "SqlDataCollector setup" + (dryRun ? " (dry run)" : "");
+        Text = "SqlHarbor setup" + (dryRun ? " (dry run)" : "");
         Size = new Size(820, 600);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         Font = new Font("Segoe UI", 9);
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (ArgumentException) { }   // the SqlHarbor mark (app.ico)
 
         _host.Text = _o.HostName;
         _installDir.Text = _o.InstallDir;
@@ -68,7 +69,7 @@ internal sealed class WizardForm : Form
         Controls.Add(_title);
 
         _pages.Add(Page("Installation mode",
-            Note("SqlDataCollector collects data from SQL Server sources into a DWH database and exports it to Google Cloud Storage."),
+            Note("SqlHarbor collects data from SQL Server sources into a DWH database and exports it to Google Cloud Storage."),
             _embedded, _central, Indent(_roleWeb), Indent(_roleWorker),
             Note("Requirements: a Windows server joined to the Active Directory domain and a SQL Server. Everything else is included.")));
         _pages.Add(Page("Service account",

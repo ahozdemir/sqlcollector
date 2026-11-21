@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Hangfire;
 using SqlDataCollector.Extract;
 using SqlDataCollector.Infrastructure;
+using SqlDataCollector.Models;
 using SqlDataCollector.Services;
 
 namespace SqlDataCollector.Alerts;
@@ -138,9 +139,9 @@ public sealed class AlertDispatcher(
                     Detail: $"Scheduled for {o:yyyy-MM-dd HH:mm} UTC ({cron}, {tz}); no run started within {grace.TotalMinutes:N0} minutes. Is a Worker running for this queue?"));
         }
 
-        foreach (var j in (await repo.GetExtractJobsAsync()).Where(j => j.IsActive))
+        foreach (var j in (await repo.GetExtractJobsAsync()).Where(j => j.IsActive && j.TriggerMode == JobTriggerMode.Schedule))
             Check("Extract", j.ExtractJobId, j.Name, j.CronExpression, j.TimeZoneId, j.ModifiedAtUtc, j.NotifyEmails);
-        foreach (var e in (await repo.GetExportJobsAsync()).Where(e => e.IsActive))
+        foreach (var e in (await repo.GetExportJobsAsync()).Where(e => e.IsActive && e.TriggerMode == JobTriggerMode.Schedule))
             Check("Export", e.ExportJobId, e.Name, e.CronExpression, e.TimeZoneId, e.ModifiedAtUtc, e.NotifyEmails);
         return list;
     }

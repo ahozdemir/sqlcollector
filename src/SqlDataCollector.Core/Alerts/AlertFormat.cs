@@ -148,14 +148,14 @@ public static partial class AlertFormat
             sb.Append("<tr><td style=\"padding:2px 12px 2px 0;color:#555\">").Append(WebUtility.HtmlEncode(n))
               .Append("</td><td style=\"padding:2px 0\">").Append(WebUtility.HtmlEncode(v)).Append("</td></tr>");
         sb.Append("</table>");
-        if (Link(e, publicUrl) is { } l) sb.Append("<p><a href=\"").Append(WebUtility.HtmlEncode(l)).Append("\">Open in SqlDataCollector</a></p>");
+        if (Link(e, publicUrl) is { } l) sb.Append("<p><a href=\"").Append(WebUtility.HtmlEncode(l)).Append("\">Open in SqlHarbor</a></p>");
         return sb.ToString();
     }
 
     /// <summary>Generic webhook body (also accepted by Slack incoming webhooks thanks to "text").</summary>
     public static object WebhookPayload(AlertEvent e, string? publicUrl) => new
     {
-        source = "SqlDataCollector",
+        source = "SqlHarbor",
         @event = e.EventType,
         jobKind = e.JobKind,
         jobId = e.JobId,
@@ -182,7 +182,7 @@ public static partial class AlertFormat
             new { type = "TextBlock", text = Title(e), weight = "Bolder", size = "Medium", color, wrap = true },
             new { type = "FactSet", facts = Facts(e).Select(f => new { title = f.Name, value = f.Value }).ToArray() }
         };
-        var actions = Link(e, publicUrl) is { } l ? new object[] { new { type = "Action.OpenUrl", title = "Open in SqlDataCollector", url = l } } : [];
+        var actions = Link(e, publicUrl) is { } l ? new object[] { new { type = "Action.OpenUrl", title = "Open in SqlHarbor", url = l } } : [];
         return new
         {
             type = "message",

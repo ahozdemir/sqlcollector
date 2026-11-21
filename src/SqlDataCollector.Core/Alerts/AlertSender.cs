@@ -34,7 +34,7 @@ public sealed class AlertSender(IOptions<AlertOptions> options)
         var msg = new MimeMessage();
         msg.From.Add(MailboxAddress.Parse(smtp.From));
         foreach (var r in recipients) msg.To.Add(MailboxAddress.Parse(r));
-        msg.Subject = $"[SqlDataCollector] {AlertFormat.Title(e)}";
+        msg.Subject = $"[SqlHarbor] {AlertFormat.Title(e)}";
         msg.Body = new BodyBuilder { TextBody = AlertFormat.PlainText(e, PublicUrl), HtmlBody = AlertFormat.Html(e, PublicUrl) }.ToMessageBody();
 
         using var client = new SmtpClient { Timeout = 20_000 };

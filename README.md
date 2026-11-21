@@ -1,4 +1,9 @@
-# SqlDataCollector
+<img src="src/SqlDataCollector/wwwroot/favicon.svg" width="56" align="left" alt="SqlHarbor logo" />
+
+# SqlHarbor
+
+*Collect, keep and ship your data.* SqlHarbor is the product name; the technical name **SqlDataCollector** stays for the
+projects and namespaces, the Windows service, the program/data folders and the database objects.
 
 A .NET 10 application that collects data on a schedule from several SQL Server sources into tables on one target
 SQL Server, manages retention on the target, and exports the collected data every night as CSV files to
@@ -88,6 +93,12 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - Local day folders under `WorkDirectory`; with `KeepLocalFiles` the files are gzip-compressed after a successful upload and kept for `LocalFileRetentionDays`
 - Resumable upload, retries, size verification
 
+**Scheduling**
+- Each job runs **on a cron schedule** (in its time zone, next runs previewed) or **after other jobs**: it starts as soon as
+  every selected extract/export has succeeded again (export *Skipped* counts), e.g. the nightly export right after all
+  extracts. Each upstream success is used once; loops are refused; checked after every run and by the sync job
+  (`etl.JobDependency`, `etl.JobTrigger`). Lists and Status show such jobs as *after A, B*.
+
 **Administration**
 - Roles **Admin / Editor / Viewer** for AD users or groups; server/database permissions (who may use which server/database as source or target)
 - Changes reach open sessions within 10 minutes
@@ -127,9 +138,9 @@ achieved with an export-only Worker on that host (see Architecture) – no `xp_c
 
 ### 4.0 Installer (recommended)
 ```powershell
-.\scripts\dev.ps1 installer        # -> artifacts\installer\dist\SqlDataCollector-Setup.exe
+.\scripts\dev.ps1 installer        # -> artifacts\installer\dist\SqlHarbor-Setup.exe
 ```
-`SqlDataCollector-Setup.exe` is one self-contained file (application + .NET runtime + wizard): nothing has to be installed on
+`SqlHarbor-Setup.exe` is one self-contained file (application + .NET runtime + wizard): nothing has to be installed on
 the server except an existing SQL Server. Requirements: Windows Server joined to the AD domain, a domain service account
 (or gMSA). The wizard asks, in this order:
 
@@ -146,13 +157,13 @@ The service is registered (automatic delayed start, restart on failure) and star
 password – there is no default. Then: grant roles to AD groups (*Permissions*), upload the GCS service account key and
 import the corporate HTTPS certificate (*Settings*). Kerberos: `setspn -S HTTP/<host> <service account>`.
 
-Silent installation: `SqlDataCollector-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]`
+Silent installation: `SqlHarbor-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]`
 (the JSON has the wizard's fields, e.g. `{"Mode":"Embedded","ServiceAccount":"CORP\\svc-sdc","SqlServer":"sql01","MetadataDb":"SdcMeta","DwhDb":"DWH","DatabaseAction":"Now","HostName":"sdc.corp.local"}`).
 Running the setup again upgrades the binaries and keeps the configuration. Uninstall: *Apps & features* or `/uninstall [/purge]`.
 
 **GitHub release:** pushing a version tag builds the installer on a GitHub-hosted Windows runner
 (`.github/workflows/release.yml`: build with warnings as errors, unit tests, `dev.ps1 installer`, SHA-256) and attaches
-`SqlDataCollector-Setup.exe` and its `.sha256` to a release of this repository:
+`SqlHarbor-Setup.exe` and its `.sha256` to a release of this repository:
 ```powershell
 git tag v1.0.0
 git push origin v1.0.0
@@ -243,7 +254,7 @@ Secrets can come from environment variables: `ConnectionStrings__Metadata`, `Loc
 | Time | Job | Worker |
 |---|---|---|
 | 00:00–00:30 | Extract jobs (ERP, CRM → DWH.stage.*) | central (`sdc_extract`) |
-| 01:00 | GCS export *All collected tables* (DWH) → one CSV set per table with that day's loads | DB host (`sdc_export`) |
+| 01:00 (or *after* the extract jobs) | GCS export *All collected tables* (DWH) → one CSV set per table with that day's loads | DB host (`sdc_export`) |
 | 01:30 | Retention (old days removed, partitions truncated) | central (`sdc_system`) |
 
 ---

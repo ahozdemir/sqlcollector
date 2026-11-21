@@ -303,6 +303,35 @@ IF COL_LENGTH(N'etl.ExportJob', N'NotifyEmails') IS NULL ALTER TABLE etl.ExportJ
 -- Replace: 1 = rebuild the table from the source schema and swap it in (instead of deleting previous loads)
 IF COL_LENGTH(N'etl.ExtractJob', N'ReplaceRebuild') IS NULL ALTER TABLE etl.ExtractJob ADD ReplaceRebuild bit NOT NULL CONSTRAINT DF_ExtractJob_ReplaceRebuild DEFAULT (0);
 GO
+
+/* ---------------- Job dependencies ----------------
+   TriggerMode: 1 = on its cron schedule, 2 = after its upstream jobs (etl.JobDependency) have all succeeded.
+   JobTrigger.LastTriggeredAtUtc: when a dependency-triggered job was last enqueued (each upstream needs a newer success). */
+IF COL_LENGTH(N'etl.ExtractJob', N'TriggerMode') IS NULL ALTER TABLE etl.ExtractJob ADD TriggerMode tinyint NOT NULL CONSTRAINT DF_ExtractJob_TriggerMode DEFAULT (1);
+IF COL_LENGTH(N'etl.ExportJob', N'TriggerMode') IS NULL ALTER TABLE etl.ExportJob ADD TriggerMode tinyint NOT NULL CONSTRAINT DF_ExportJob_TriggerMode DEFAULT (1);
+GO
+IF OBJECT_ID(N'etl.JobDependency', N'U') IS NULL
+CREATE TABLE etl.JobDependency
+(
+    JobDependencyId int IDENTITY(1,1) NOT NULL CONSTRAINT PK_JobDependency PRIMARY KEY,
+    JobKind         varchar(10) NOT NULL CONSTRAINT CK_JobDependency_Kind CHECK (JobKind IN ('Extract','Export')),
+    JobId           int NOT NULL,
+    UpstreamKind    varchar(10) NOT NULL CONSTRAINT CK_JobDependency_UpKind CHECK (UpstreamKind IN ('Extract','Export')),
+    UpstreamId      int NOT NULL,
+    CreatedBy       nvarchar(256) NOT NULL,
+    CreatedAtUtc    datetime2(3) NOT NULL CONSTRAINT DF_JobDependency_Created DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT UQ_JobDependency UNIQUE (JobKind, JobId, UpstreamKind, UpstreamId)
+);
+GO
+IF OBJECT_ID(N'etl.JobTrigger', N'U') IS NULL
+CREATE TABLE etl.JobTrigger
+(
+    JobKind            varchar(10) NOT NULL,
+    JobId              int NOT NULL,
+    LastTriggeredAtUtc datetime2(3) NOT NULL,
+    CONSTRAINT PK_JobTrigger PRIMARY KEY (JobKind, JobId)
+);
+GO
 IF OBJECT_ID(N'etl.AlertChannel', N'U') IS NULL
 CREATE TABLE etl.AlertChannel
 (

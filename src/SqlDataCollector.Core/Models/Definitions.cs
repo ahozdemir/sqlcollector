@@ -10,6 +10,9 @@ public enum QuoteMode : byte { Minimal = 0, AllText = 1, All = 2 }
 
 public enum SchemaPolicy : byte { Strict = 1, Evolve = 2 }
 
+/// <summary>How a job is started: on its cron schedule, or after its upstream jobs (etl.JobDependency) have all succeeded.</summary>
+public enum JobTriggerMode : byte { Schedule = 1, AfterJobs = 2 }
+
 public sealed class SqlServerDef
 {
     public int SqlServerId { get; set; }
@@ -57,6 +60,7 @@ public sealed class ExtractJobDef
     public int CommandTimeoutSec { get; set; } = 3600;
     public int BatchSize { get; set; } = 10000;
     public bool ReplaceRebuild { get; set; }   // Replace: rebuild the table and swap it in
+    public JobTriggerMode TriggerMode { get; set; } = JobTriggerMode.Schedule;
     public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
     public bool IsActive { get; set; } = true;
     public string? CreatedBy { get; set; }
@@ -96,6 +100,7 @@ public sealed class ExportJobDef
     public int? MaxRowsPerFile { get; set; }
     public bool UploadWhenEmpty { get; set; } = true;
     public bool WriteManifest { get; set; } = true;
+    public JobTriggerMode TriggerMode { get; set; } = JobTriggerMode.Schedule;
     public int CommandTimeoutSec { get; set; } = 3600;
     public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
     public bool IsActive { get; set; } = true;
@@ -185,4 +190,38 @@ public static class AppRoles
     public const string Editor = "Editor";
     public const string Viewer = "Viewer";
     public static readonly string[] All = [Admin, Editor, Viewer];
+}
+
+/// <summary>"JobKind/JobId runs after UpstreamKind/UpstreamId has succeeded" (all upstreams of a job must succeed).</summary>
+public sealed class JobDependencyRow
+{
+    public string JobKind { get; set; } = "";
+    public int JobId { get; set; }
+    public string UpstreamKind { get; set; } = "";
+    public int UpstreamId { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public string? UpstreamName { get; set; }
+}
+
+/// <summary>A job reference: Kind is "Extract" or "Export".</summary>
+public readonly record struct JobRef(string Kind, int Id)
+{
+    public const string Extract = "Extract";
+    public const string Export = "Export";
+    public override string ToString() => $"{Kind} #{Id}";
+}
+
+/// <summary>A dependency row with the upstream's latest success and the dependent's last dependency trigger (UTC, database clock).</summary>
+public sealed class DependencyStateRow
+{
+    public string JobKind { get; set; } = "";
+    public int JobId { get; set; }
+    public string UpstreamKind { get; set; } = "";
+    public int UpstreamId { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime? UpstreamLastSuccessUtc { get; set; }
+    public DateTime? LastTriggeredAtUtc { get; set; }
+
+    public JobRef Job => new(JobKind, JobId);
+    public JobRef Upstream => new(UpstreamKind, UpstreamId);
 }

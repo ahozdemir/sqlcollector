@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using SqlDataCollector.Infrastructure;
 using SqlDataCollector.Models;
 using SqlDataCollector.Options;
+using SqlDataCollector.Services;
 
 namespace SqlDataCollector.Extract;
 
@@ -39,12 +40,19 @@ public sealed class ExtractRunner(
     MetadataRepository repo,
     SqlConnectionFactory factory,
     TargetTableManager tableManager,
+    DependencyService dependencies,
     IOptions<CollectorOptions> options,
     ILogger<ExtractRunner> logger)
 {
     [JobDisplayName("Extract #{0}: {1}")]
     [AutomaticRetry(Attempts = 2, DelaysInSeconds = [120, 600], OnAttemptsExceeded = AttemptsExceededAction.Fail)]
     public async Task RunAsync(int extractJobId, string jobName, string? triggeredBy, CancellationToken ct)
+    {
+        try { await RunCoreAsync(extractJobId, triggeredBy, ct); }
+        finally { await dependencies.TryEvaluateAsync(CancellationToken.None); }   // starts jobs that run "after" this one
+    }
+
+    private async Task RunCoreAsync(int extractJobId, string? triggeredBy, CancellationToken ct)
     {
         var job = await repo.GetExtractJobAsync(extractJobId);
         if (job is null) { logger.LogWarning("Extract job {Id} not found (may have been deleted).", extractJobId); return; }
@@ -225,4 +233,5 @@ public static class LockNames
     public const string Retention = "etl:retention";
     public const string Sync = "etl:sync";
     public const string Alerts = "etl:alerts";
+    public const string Dependencies = "etl:dependencies";
 }

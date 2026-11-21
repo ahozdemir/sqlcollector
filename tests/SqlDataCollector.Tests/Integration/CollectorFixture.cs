@@ -41,6 +41,9 @@ public sealed partial class CollectorFixture : IAsyncLifetime
     public string GcsBaseUrl => $"http://localhost:{_gcsPort}";
     public HttpClient Http { get; } = new();
 
+    /// <summary>Dependent jobs started by DependencyService (instead of a Hangfire enqueue).</summary>
+    public RecordingLauncher Launcher { get; } = new();
+
     public async Task InitializeAsync()
     {
         _sql = new MsSqlBuilder(Environment.GetEnvironmentVariable("SDC_TEST_MSSQL_IMAGE") ?? "mcr.microsoft.com/mssql/server:2022-latest")
@@ -84,6 +87,7 @@ public sealed partial class CollectorFixture : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(config);
         services.AddLogging(b => b.AddSimpleConsole().SetMinimumLevel(LogLevel.Warning));
+        services.AddSingleton<SqlDataCollector.Services.IDependentJobLauncher>(Launcher);   // no Hangfire in tests: dependent jobs are recorded
         services.AddSqlDataCollectorCore(config);   // same registration as production hosts
         Services = services.BuildServiceProvider();
 

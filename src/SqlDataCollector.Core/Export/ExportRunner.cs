@@ -10,6 +10,7 @@ using SqlDataCollector.Extract;
 using SqlDataCollector.Infrastructure;
 using SqlDataCollector.Models;
 using SqlDataCollector.Options;
+using SqlDataCollector.Services;
 
 namespace SqlDataCollector.Export;
 
@@ -56,6 +57,7 @@ public sealed class ExportRunner(
     MetadataRepository repo,
     SqlConnectionFactory factory,
     GcsUploader uploader,
+    DependencyService dependencies,
     IOptions<CollectorOptions> options,
     ILogger<ExportRunner> logger)
 {
@@ -70,6 +72,12 @@ public sealed class ExportRunner(
     [JobDisplayName("Export #{0}: {1}")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = [300, 900, 1800], OnAttemptsExceeded = AttemptsExceededAction.Fail)]
     public async Task RunAsync(int exportJobId, string jobName, string? triggeredBy, CancellationToken ct)
+    {
+        try { await RunCoreAsync(exportJobId, triggeredBy, ct); }
+        finally { await dependencies.TryEvaluateAsync(CancellationToken.None); }   // starts jobs that run "after" this one
+    }
+
+    private async Task RunCoreAsync(int exportJobId, string? triggeredBy, CancellationToken ct)
     {
         var job = await repo.GetExportJobAsync(exportJobId);
         if (job is null) { logger.LogWarning("Export job {Id} not found (may have been deleted).", exportJobId); return; }

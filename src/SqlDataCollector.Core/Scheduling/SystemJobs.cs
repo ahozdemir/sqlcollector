@@ -89,6 +89,7 @@ public sealed class JobSynchronizer(
     IRecurringJobManager recurring,
     JobStorage storage,
     SystemSettingsService settings,
+    DependencyService dependencies,
     IOptions<CollectorOptions> options,
     ILogger<JobSynchronizer> logger)
 {
@@ -103,13 +104,13 @@ public sealed class JobSynchronizer(
         var desired = new HashSet<string>(StringComparer.Ordinal);
         foreach (var j in await repo.GetExtractJobsAsync())
         {
-            if (!j.IsActive) continue;
+            if (!j.IsActive || j.TriggerMode == JobTriggerMode.AfterJobs) continue;   // no recurring entry: started by DependencyService
             desired.Add(JobRegistrar.ExtractId(j.ExtractJobId));
             TryRegister(JobRegistrar.ExtractId(j.ExtractJobId), j.Name, () => registrar.Register(j));
         }
         foreach (var e in await repo.GetExportJobsAsync())
         {
-            if (!e.IsActive) continue;
+            if (!e.IsActive || e.TriggerMode == JobTriggerMode.AfterJobs) continue;
             desired.Add(JobRegistrar.ExportId(e.ExportJobId));
             TryRegister(JobRegistrar.ExportId(e.ExportJobId), e.Name, () => registrar.Register(e));
         }
@@ -133,6 +134,9 @@ public sealed class JobSynchronizer(
 
         await RecoverDeadLoadsAsync(ct);
         await RecoverDeadExportsAsync(ct);
+
+        // catches dependents a run could not start (Worker stopped, lock timeout, enqueue error)
+        await dependencies.TryEvaluateAsync(ct);
     }
 
     private void TryRegister(string id, string name, Action register)

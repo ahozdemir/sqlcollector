@@ -122,7 +122,7 @@ public sealed class AlertDispatcherTests(CollectorFixture fx) : IAsyncLifetime
         await InsertRunAsync(job.ExtractJobId, "Failed", "Login failed for user 'x'.\n   at stack");
         await dispatcher.RunOnceAsync(CancellationToken.None);
         var mails = await MailsAsync();
-        Assert.Contains(mails, m => m.To == "dba@test.local" && m.Subject == $"[SqlDataCollector] FAILED: extract job '{job.Name}'");
+        Assert.Contains(mails, m => m.To == "dba@test.local" && m.Subject == $"[SqlHarbor] FAILED: extract job '{job.Name}'");
         Assert.Contains(mails, m => m.To == "owner@test.local");
         Assert.Single(_hooks, h => h.Path == "/teams" && h.Body.Contains("application/vnd.microsoft.card.adaptive"));
         var hook = Assert.Single(_hooks, h => h.Path == "/hook");

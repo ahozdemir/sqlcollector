@@ -3,7 +3,7 @@ using System.Text;
 namespace SqlDataCollector.Setup;
 
 /// <summary>
-/// SqlDataCollector-Setup.exe
+/// SqlHarbor-Setup.exe
 ///   (no arguments)                         installation wizard
 ///   /silent /config install.json [/password-env NAME] [/log file] [/dryrun] [/payload dir|zip]
 ///   /uninstall [/silent] [/purge]          remove the service, firewall rule and program files (data and databases are kept unless /purge)
@@ -18,7 +18,7 @@ internal static class Program
         bool Flag(string name) => args.Any(a => a.Equals("/" + name, StringComparison.OrdinalIgnoreCase));
 
         var silent = Flag("silent");
-        var logFile = Arg("log") ?? Path.Combine(Path.GetTempPath(), $"SqlDataCollector-Setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+        var logFile = Arg("log") ?? Path.Combine(Path.GetTempPath(), $"SqlHarbor-Setup-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
         if (Flag("uninstall"))
         {
@@ -26,8 +26,8 @@ internal static class Program
             if (!silent)
             {
                 ApplicationConfiguration.Initialize();
-                if (MessageBox.Show($"Remove SqlDataCollector (service {o.ServiceName}, {o.AppDir})?\nThe databases and {o.DataDir} are kept.",
-                        "SqlDataCollector", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return 1;
+                if (MessageBox.Show($"Remove SqlHarbor (service {o.ServiceName}, {o.AppDir})?\nThe databases and {o.DataDir} are kept.",
+                        "SqlHarbor", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return 1;
             }
             return Run(logFile, silent, log => new Engine(o, log, Flag("dryrun")).UninstallAsync(Flag("purge"), CancellationToken.None));
         }
@@ -60,7 +60,7 @@ internal static class Program
         catch (Exception ex)
         {
             Log("✖ " + ex.Message);
-            if (!silent) MessageBox.Show(ex.Message, "SqlDataCollector setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!silent) MessageBox.Show(ex.Message, "SqlHarbor setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }

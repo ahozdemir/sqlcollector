@@ -4,7 +4,7 @@
 @inject Hangfire.JobStorage Storage
 @inject CertificateManager Certificates
 
-<PageTitle>Status – SqlDataCollector</PageTitle>
+<PageTitle>Status – SqlHarbor</PageTitle>
 
 <div class="d-flex align-items-center mb-3">
     <h1 class="h4 mb-0 me-auto">Status</h1>
@@ -79,7 +79,7 @@
             <tr class="@(r.IsActive ? "" : "text-muted")">
                 <td>@r.JobKind</td>
                 <td><a href="@(r.JobKind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")">@r.Name</a> @if (!r.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
-                <td class="mono">@r.CronExpression</td>
+                <td><ScheduleCell Kind="@r.JobKind" JobId="r.JobId" Cron="@r.CronExpression" Dependencies="deps" /></td>
                 <td><StatusBadge Status="@r.LastStatus" /></td>
                 <td>@Ui.Local(r.StartedAtUtc)</td>
                 <td>@(r.StartedAtUtc is null ? "" : Ui.Duration(r.StartedAtUtc.Value, r.FinishedAtUtc))</td>
@@ -92,6 +92,7 @@
 
 @code {
     private IReadOnlyList<JobStatusRow> rows = [];
+    private IReadOnlyList<JobDependencyRow> deps = [];
     private IList<Hangfire.Storage.Monitoring.ServerDto> servers = [];
     private long enqueued, processing, failed;
     private int Problems => rows.Count(r => r.LastStatus is "Failed" or "PartiallyFailed" or "Abandoned" or "CleanupPending");
@@ -101,6 +102,7 @@
     private async Task LoadAsync()
     {
         rows = await Repo.GetJobStatusAsync();
+        deps = await Repo.GetJobDependenciesAsync();
         var mon = Storage.GetMonitoringApi();
         // any Hangfire server (ours or a shared host) that listens to at least one SqlDataCollector queue
         servers = mon.Servers().Where(s => s.Queues.Any(q => CollectorQueues.All.Contains(q, StringComparer.OrdinalIgnoreCase))).ToList();

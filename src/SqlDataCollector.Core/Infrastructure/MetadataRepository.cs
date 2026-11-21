@@ -20,7 +20,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                j.SourceType, j.SourceSchema, j.SourceTable, j.ColumnList, j.FilterClause, j.SourceQuery, j.UseNoLock,
                j.LoadMode, j.WatermarkColumn, j.SchemaPolicy, j.PartitionDaily, j.TargetServerId, ts.Name AS TargetServerName, j.TargetDatabase,
                j.TargetSchema, j.TargetTable, j.CronExpression, j.TimeZoneId, j.RetentionDays, j.CommandTimeoutSec,
-               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
+               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
         FROM etl.ExtractJob j
         JOIN etl.SqlServer ss ON ss.SqlServerId = j.SourceServerId
         JOIN etl.SqlServer ts ON ts.SqlServerId = j.TargetServerId
@@ -31,7 +31,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                e.SourceSchema, e.SourceTable, e.SourceQuery, e.ColumnList, e.IncludeTechnicalColumns, e.CronExpression,
                e.TimeZoneId, e.Bucket, e.ObjectNameTemplate, e.Delimiter, e.QuoteMode, e.NullValue, e.LineEnding,
                e.Utf8Bom, e.Gzip, e.MaxRowsPerFile, e.UploadWhenEmpty, e.WriteManifest, e.CommandTimeoutSec,
-               e.NotifyEmails, e.IsActive, e.CreatedBy, e.ModifiedBy, e.ModifiedAtUtc
+               e.NotifyEmails, e.TriggerMode, e.IsActive, e.CreatedBy, e.ModifiedBy, e.ModifiedAtUtc
         FROM etl.ExportJob e
         JOIN etl.SqlServer s ON s.SqlServerId = e.SourceServerId
         """;
@@ -186,11 +186,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             j.ExtractJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExtractJob (Name, SourceServerId, SourceDatabase, SourceType, SourceSchema, SourceTable, ColumnList, FilterClause,
                     SourceQuery, UseNoLock, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
-                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, IsActive, CreatedBy, ModifiedBy)
+                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExtractJobId
                 VALUES (@Name, @SourceServerId, @SourceDatabase, @SourceType, @SourceSchema, @SourceTable, @ColumnList, @FilterClause,
                     @SourceQuery, @UseNoLock, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
-                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @IsActive, @CreatedBy, @ModifiedBy);
+                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, j);
         }
         else
@@ -201,7 +201,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                     FilterClause = @FilterClause, SourceQuery = @SourceQuery, UseNoLock = @UseNoLock, LoadMode = @LoadMode,
                     WatermarkColumn = @WatermarkColumn, SchemaPolicy = @SchemaPolicy, PartitionDaily = @PartitionDaily, TargetServerId = @TargetServerId, TargetDatabase = @TargetDatabase,
                     TargetSchema = @TargetSchema, TargetTable = @TargetTable, CronExpression = @CronExpression, TimeZoneId = @TimeZoneId,
-                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, IsActive = @IsActive,
+                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, TriggerMode = @TriggerMode, IsActive = @IsActive,
                     ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExtractJobId = @ExtractJobId;
                 """, j);
@@ -213,7 +213,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
     public async Task DeleteExtractJobAsync(int id, string user)
     {
         await using var c = Conn();
-        await c.ExecuteAsync("DELETE etl.ExtractJob WHERE ExtractJobId = @id", new { id });
+        await c.ExecuteAsync(DeleteDependenciesSql + "DELETE etl.ExtractJob WHERE ExtractJobId = @id;", new { id, kind = "Extract" });
         await AuditAsync(user, "Delete", "ExtractJob", id, null);
     }
 
@@ -329,11 +329,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             e.ExportJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExportJob (Name, ExportMode, SourceServerId, SourceDatabase, SourceSchema, SourceTable, SourceQuery, ColumnList,
                     IncludeTechnicalColumns, CronExpression, TimeZoneId, Bucket, ObjectNameTemplate, Delimiter, QuoteMode, NullValue,
-                    LineEnding, Utf8Bom, Gzip, MaxRowsPerFile, UploadWhenEmpty, WriteManifest, CommandTimeoutSec, NotifyEmails, IsActive, CreatedBy, ModifiedBy)
+                    LineEnding, Utf8Bom, Gzip, MaxRowsPerFile, UploadWhenEmpty, WriteManifest, CommandTimeoutSec, NotifyEmails, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExportJobId
                 VALUES (@Name, @ExportMode, @SourceServerId, @SourceDatabase, @SourceSchema, @SourceTable, @SourceQuery, @ColumnList,
                     @IncludeTechnicalColumns, @CronExpression, @TimeZoneId, @Bucket, @ObjectNameTemplate, @Delimiter, @QuoteMode, @NullValue,
-                    @LineEnding, @Utf8Bom, @Gzip, @MaxRowsPerFile, @UploadWhenEmpty, @WriteManifest, @CommandTimeoutSec, @NotifyEmails, @IsActive, @CreatedBy, @ModifiedBy);
+                    @LineEnding, @Utf8Bom, @Gzip, @MaxRowsPerFile, @UploadWhenEmpty, @WriteManifest, @CommandTimeoutSec, @NotifyEmails, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, e);
         }
         else
@@ -345,7 +345,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                     Bucket = @Bucket, ObjectNameTemplate = @ObjectNameTemplate, Delimiter = @Delimiter, QuoteMode = @QuoteMode,
                     NullValue = @NullValue, LineEnding = @LineEnding, Utf8Bom = @Utf8Bom, Gzip = @Gzip, MaxRowsPerFile = @MaxRowsPerFile,
                     UploadWhenEmpty = @UploadWhenEmpty, WriteManifest = @WriteManifest, CommandTimeoutSec = @CommandTimeoutSec,
-                    NotifyEmails = @NotifyEmails, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
+                    NotifyEmails = @NotifyEmails, TriggerMode = @TriggerMode, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExportJobId = @ExportJobId;
                 """, e);
         }
@@ -356,7 +356,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
     public async Task DeleteExportJobAsync(int id, string user)
     {
         await using var c = Conn();
-        await c.ExecuteAsync("DELETE etl.ExportJob WHERE ExportJobId = @id", new { id });
+        await c.ExecuteAsync(DeleteDependenciesSql + "DELETE etl.ExportJob WHERE ExportJobId = @id;", new { id, kind = "Export" });
         await AuditAsync(user, "Delete", "ExportJob", id, null);
     }
 
@@ -468,6 +468,90 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
     {
         await using var c = Conn();
         return (await c.QueryAsync<RunningExport>("SELECT ExportRunId, ExportJobId FROM etl.ExportRun WHERE Status = 'Running'")).AsList();
+    }
+
+    // ================================================================ job dependencies
+
+    /// <summary>Removes a job's dependency rows (as dependent and as upstream) and its trigger state; expects @kind and @id.</summary>
+    private const string DeleteDependenciesSql = """
+        DELETE etl.JobDependency WHERE (JobKind = @kind AND JobId = @id) OR (UpstreamKind = @kind AND UpstreamId = @id);
+        DELETE etl.JobTrigger WHERE JobKind = @kind AND JobId = @id;
+
+        """;
+
+    public async Task<IReadOnlyList<JobDependencyRow>> GetJobDependenciesAsync()
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<JobDependencyRow>("""
+            SELECT d.JobKind, d.JobId, d.UpstreamKind, d.UpstreamId, d.CreatedAtUtc,
+                   COALESCE(j.Name, e.Name, CONCAT(d.UpstreamKind, ' #', d.UpstreamId)) AS UpstreamName
+            FROM etl.JobDependency d
+            LEFT JOIN etl.ExtractJob j ON d.UpstreamKind = 'Extract' AND j.ExtractJobId = d.UpstreamId
+            LEFT JOIN etl.ExportJob e ON d.UpstreamKind = 'Export' AND e.ExportJobId = d.UpstreamId
+            ORDER BY d.JobKind, d.JobId, UpstreamName;
+            """)).AsList();
+    }
+
+    /// <summary>
+    /// Replaces the upstream jobs of a job. Rows that stay keep their CreatedAtUtc, so an unchanged
+    /// dependency does not reset the "newer success" baseline; new rows only count successes from now on.
+    /// </summary>
+    public async Task SaveJobDependenciesAsync(string jobKind, int jobId, IReadOnlyCollection<JobRef> upstreams, string user)
+    {
+        await using var c = Conn();
+        await c.OpenAsync();
+        await using var tx = await c.BeginTransactionAsync();
+        var existing = (await c.QueryAsync<(int Id, string Kind, int UpId)>(
+            "SELECT JobDependencyId, UpstreamKind, UpstreamId FROM etl.JobDependency WITH (UPDLOCK, HOLDLOCK) WHERE JobKind = @jobKind AND JobId = @jobId",
+            new { jobKind, jobId }, tx)).AsList();
+        var wanted = upstreams.Distinct().ToList();
+
+        foreach (var row in existing.Where(r => !wanted.Contains(new JobRef(r.Kind, r.UpId))))
+            await c.ExecuteAsync("DELETE etl.JobDependency WHERE JobDependencyId = @Id", new { row.Id }, tx);
+        foreach (var up in wanted.Where(u => !existing.Any(r => r.Kind == u.Kind && r.UpId == u.Id)))
+            await c.ExecuteAsync("""
+                INSERT etl.JobDependency (JobKind, JobId, UpstreamKind, UpstreamId, CreatedBy) VALUES (@jobKind, @jobId, @Kind, @Id, @user);
+                """, new { jobKind, jobId, up.Kind, up.Id, user }, tx);
+        if (wanted.Count == 0)
+            await c.ExecuteAsync("DELETE etl.JobTrigger WHERE JobKind = @jobKind AND JobId = @jobId", new { jobKind, jobId }, tx);
+        await tx.CommitAsync();
+
+        if (wanted.Count != existing.Count || existing.Any(r => !wanted.Contains(new JobRef(r.Kind, r.UpId))))
+            await AuditAsync(user, "SetDependencies", jobKind + "Job", jobId, new { Upstreams = wanted.Select(u => u.ToString()) });
+    }
+
+    /// <summary>Every dependency row with the upstream's latest success and the dependent's last dependency trigger.</summary>
+    public async Task<IReadOnlyList<DependencyStateRow>> GetDependencyStatesAsync()
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<DependencyStateRow>("""
+            WITH ok AS (
+                SELECT 'Extract' AS Kind, r.ExtractJobId AS JobId, MAX(r.FinishedAtUtc) AS LastOkUtc
+                FROM etl.LoadRun r
+                WHERE r.Status = 'Succeeded' AND r.ExtractJobId IN (SELECT UpstreamId FROM etl.JobDependency WHERE UpstreamKind = 'Extract')
+                GROUP BY r.ExtractJobId
+                UNION ALL
+                -- an export with nothing new to send (Skipped) has finished its work too
+                SELECT 'Export', r.ExportJobId, MAX(r.FinishedAtUtc)
+                FROM etl.ExportRun r
+                WHERE r.Status IN ('Succeeded', 'Skipped') AND r.ExportJobId IN (SELECT UpstreamId FROM etl.JobDependency WHERE UpstreamKind = 'Export')
+                GROUP BY r.ExportJobId)
+            SELECT d.JobKind, d.JobId, d.UpstreamKind, d.UpstreamId, d.CreatedAtUtc,
+                   ok.LastOkUtc AS UpstreamLastSuccessUtc, t.LastTriggeredAtUtc
+            FROM etl.JobDependency d
+            LEFT JOIN ok ON ok.Kind = d.UpstreamKind AND ok.JobId = d.UpstreamId
+            LEFT JOIN etl.JobTrigger t ON t.JobKind = d.JobKind AND t.JobId = d.JobId;
+            """)).AsList();
+    }
+
+    /// <summary>Records that a dependency-triggered job was enqueued now (database clock, same as run timestamps).</summary>
+    public async Task SetJobTriggeredAsync(JobRef job)
+    {
+        await using var c = Conn();
+        await c.ExecuteAsync("""
+            UPDATE etl.JobTrigger SET LastTriggeredAtUtc = SYSUTCDATETIME() WHERE JobKind = @Kind AND JobId = @Id;
+            IF @@ROWCOUNT = 0 INSERT etl.JobTrigger (JobKind, JobId, LastTriggeredAtUtc) VALUES (@Kind, @Id, SYSUTCDATETIME());
+            """, new { job.Kind, job.Id });
     }
 
     // ================================================================ monitoring

@@ -23,7 +23,7 @@
                 <td>@e.ExportMode</td>
                 <td class="mono small">gs://@e.Bucket/@e.ObjectNameTemplate</td>
                 <td class="small">@(e.Delimiter == "\t" ? "TAB" : e.Delimiter) @(e.Gzip ? "· gzip" : "") @(e.MaxRowsPerFile is null ? "" : $"· {e.MaxRowsPerFile:N0}/file")</td>
-                <td class="mono">@e.CronExpression</td>
+                <td><ScheduleCell Kind="@JobRef.Export" JobId="e.ExportJobId" Cron="@e.CronExpression" AfterJobs="@(e.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
                 <td class="small">@e.ModifiedBy<br /><span class="text-muted">@Ui.Local(e.ModifiedAtUtc)</span></td>
             </tr>
         }
@@ -32,10 +32,12 @@
 
 @code {
     private IReadOnlyList<ExportJobDef> jobs = [];
+    private IReadOnlyList<JobDependencyRow> deps = [];
     private bool canEdit;
     protected override async Task OnInitializedAsync()
     {
         jobs = await Repo.GetExportJobsAsync();
+        deps = await Repo.GetJobDependenciesAsync();
         canEdit = await Access.CanEditAsync();
     }
 }

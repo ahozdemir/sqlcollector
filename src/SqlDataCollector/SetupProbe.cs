@@ -71,11 +71,11 @@ public static class SetupProbe
             : $"<li>Run the SQL scripts in <code>{e(scripts)}</code> (in numeric order, with a sysadmin/DBA account), or let the installer create the databases.</li>";
         return $$"""
             <!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="30">
-            <title>Setup required – SqlDataCollector</title>
+            <title>Setup required – SqlHarbor</title>
             <style>body{font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:48px auto;padding:0 16px;color:#222}
             code{background:#f3f3f3;padding:1px 4px;border-radius:3px}.box{border:1px solid #e0b4b4;background:#fff6f6;padding:12px 16px;border-radius:6px}</style>
             </head><body>
-            <h1>SqlDataCollector – setup required</h1>
+            <h1>SqlHarbor – setup required</h1>
             <div class="box"><b>The metadata database is not ready.</b><br>{{e(problem)}}</div>
             <h3>What to do</h3>
             <ol>

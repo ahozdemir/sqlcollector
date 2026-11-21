@@ -1,7 +1,7 @@
 @page "/help"
 @attribute [Authorize(Policy = AppRoles.Viewer)]
 
-<PageTitle>Help – SqlDataCollector</PageTitle>
+<PageTitle>Help – SqlHarbor</PageTitle>
 
 <div class="row">
     <div class="col-lg-3 d-none d-lg-block">
@@ -19,7 +19,7 @@
 
         <section id="overview">
             <h2>Overview</h2>
-            <p>SqlDataCollector collects data on a schedule from several SQL Server <b>sources</b> into tables on a <b>target</b> SQL Server,
+            <p><b>SqlHarbor</b> (technical name SqlDataCollector: service, folders and database objects) collects data on a schedule from several SQL Server <b>sources</b> into tables on a <b>target</b> SQL Server,
                keeps it there for a configurable <b>retention</b> period, and exports it as <b>CSV files to Google Cloud Storage</b>.
                Scheduling and execution are handled by <b>Hangfire</b>.</p>
             <ul>
@@ -247,7 +247,26 @@
                 </tbody>
             </table>
             <p>A job never runs twice at the same time: if the previous run is still busy, the new trigger is skipped.
-               Schedule exports <b>after</b> the extracts they depend on (e.g. extracts at 00:00–00:30, export at 01:00).</p>
+               Instead of guessing times, an export can also run <a href="/help#dependencies">after its extracts</a>.</p>
+        </section>
+
+        <section id="dependencies">
+            <h2>Job dependencies (run after other jobs)</h2>
+            <p>In section <i>4 · Trigger</i> of an extract or export job choose <b>After other jobs</b> and tick the jobs it waits for (extracts and exports can be mixed).
+               The job then has no cron schedule: it starts automatically as soon as <b>every</b> selected job has succeeded <b>since this job was last started by them</b>.</p>
+            <ul>
+                <li>Typical use: a nightly export that runs after all extracts of the database (<code>extract A, extract B → export</code>). Chains are possible (A → B → C).</li>
+                <li>Success means <i>Succeeded</i>; for an upstream export also <i>Skipped</i> (nothing new to export). A failed or partially failed upstream keeps the dependent waiting,
+                    until that upstream succeeds on a later run (retry or next schedule).</li>
+                <li>Each upstream success is used once: if A runs every hour and B once a night, the dependent runs once a night (when both have a newer success).</li>
+                <li>A dependency added today does not fire on yesterday's successes: only runs that finish after the dependency was saved count.</li>
+                <li>Manual <i>Run now</i> of an upstream counts like a scheduled run. <i>Run now</i> of the dependent itself is always possible and does not change its waiting state.</li>
+                <li>The check runs right after every run (in the Worker that executed it) and again in the periodic <i>Sync job definitions</i> job, so nothing is lost if a Worker stops.
+                    If the dependent is still running, it is started again after its run ends.</li>
+                <li>Loops (A after B, B after A) cannot be saved. An inactive upstream never succeeds, so its dependents wait. Deleting a job removes its dependencies.</li>
+                <li>Lists and the Status page show such jobs as <span class="badge bg-light text-dark border">after</span> <i>job names</i>; the run's <i>Triggered by</i> is <code>after A, B</code>.
+                    <i>Missed run</i> alerts do not apply to them (they have no schedule); failure alerts do.</li>
+            </ul>
         </section>
 
         <section id="servers">
@@ -308,7 +327,7 @@
         </section>
 
         <section id="installation">
-            <h2>Installation (SqlDataCollector-Setup.exe)</h2>
+            <h2>Installation (SqlHarbor-Setup.exe)</h2>
             <p>One self-contained file: application, .NET runtime and wizard – nothing else has to be installed on the server (SQL Server is separate).
                The server must be joined to the AD domain; the service always runs as a domain account (or gMSA).</p>
             <ol>
@@ -318,9 +337,9 @@
                     the scripts are written to <code>&lt;program folder&gt;\sql</code> for the DBA. Central Hangfire: <code>03_hangfire_central.sql</code> is always for the DBA.
                     Until the metadata database is ready the application shows a <i>setup required</i> page and restarts itself as soon as it is.</li>
                 <li><b>Web</b>: host name and HTTPS port, self-signed certificate, firewall rule; program and data folder (certificate, temporary CSV files).</li>
-                <li>The service starts; <i>Open SqlDataCollector</i> opens <code>https://localhost/login</code> for the first sign-in.</li>
+                <li>The service starts; <i>Open SqlHarbor</i> opens <code>https://localhost/login</code> for the first sign-in.</li>
             </ol>
-            <p>Silent: <code>SqlDataCollector-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]</code>. Uninstall: Apps &amp; features,
+            <p>Silent: <code>SqlHarbor-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]</code>. Uninstall: Apps &amp; features,
                or <code>/uninstall [/purge]</code> (databases and, without /purge, the data folder are kept). Running the setup again upgrades the binaries and keeps the configuration.</p>
         </section>
 
@@ -421,7 +440,7 @@
         ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "CSV format"),
-        ("cron", "Scheduling (cron)"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
+        ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
     ];

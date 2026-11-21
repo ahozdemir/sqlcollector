@@ -24,7 +24,7 @@
                 <td class="mono">@j.TargetServerName / @j.TargetDatabase / @j.TargetSchema.@j.TargetTable</td>
                 <td>@j.LoadMode @if (j.LoadMode == LoadMode.Incremental) { <span class="text-muted small">(@j.WatermarkColumn)</span> }</td>
                 <td>@j.SchemaPolicy @if (j.PartitionDaily) { <span class="badge bg-info-subtle text-info-emphasis">daily part.</span> }</td>
-                <td class="mono">@j.CronExpression</td>
+                <td><ScheduleCell Kind="@JobRef.Extract" JobId="j.ExtractJobId" Cron="@j.CronExpression" AfterJobs="@(j.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
                 <td>@(j.LoadMode == LoadMode.Replace ? "latest load" : j.RetentionDays is null ? "∞" : $"{j.RetentionDays} days")</td>
                 <td class="small">@j.ModifiedBy<br /><span class="text-muted">@Ui.Local(j.ModifiedAtUtc)</span></td>
             </tr>
@@ -34,6 +34,7 @@
 
 @code {
     private IReadOnlyList<ExtractJobDef> jobs = [];
+    private IReadOnlyList<JobDependencyRow> deps = [];
     private string filter = "";
     private bool canEdit;
 
@@ -44,6 +45,7 @@
     protected override async Task OnInitializedAsync()
     {
         jobs = await Repo.GetExtractJobsAsync();
+        deps = await Repo.GetJobDependenciesAsync();
         canEdit = await Access.CanEditAsync();
     }
 }

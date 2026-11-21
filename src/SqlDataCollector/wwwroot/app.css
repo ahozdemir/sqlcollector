@@ -31,8 +31,7 @@ a { text-decoration: none; }
 }
 .sdc-brand { display: flex; align-items: center; gap: .65rem; padding: 1.05rem 1.1rem; border-bottom: 1px solid rgba(255,255,255,.07); color: #fff; }
 .sdc-brand:hover { color: #fff; }
-.sdc-brand-mark { width: 34px; height: 34px; border-radius: 8px; background: var(--sdc-primary); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 34px; }
-.sdc-brand-mark svg { width: 20px; height: 20px; fill: none; stroke: #fff; stroke-width: 1.7; }
+.sdc-brand-mark { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .16); }   /* SqlHarbor mark (BrandMark.razor); the ring separates it from the dark band */
 .sdc-brand-name { display: block; font-weight: 600; font-size: .95rem; letter-spacing: .01em; line-height: 1.15; }
 .sdc-brand-sub { display: block; font-size: .7rem; color: var(--sdc-nav-text); }
 

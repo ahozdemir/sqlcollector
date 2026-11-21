@@ -6,6 +6,7 @@
 @inject CatalogService Catalog
 @inject JobRegistrar Registrar
 @inject NavigationManager Nav
+@inject DependencyService Dependencies
 @using Microsoft.Data.SqlClient
 @using SqlDataCollector.Export
 
@@ -182,8 +183,10 @@
         </div></div>
 
         <div class="card"><div class="card-body">
-            <div class="section-title mb-2">4 · Schedule <HelpLink Topic="cron" Title="Scheduling" /></div>
-            <CronEditor @bind-Cron="job.CronExpression" @bind-TimeZoneId="job.TimeZoneId" Disabled="@(!canEdit)" />
+            <div class="section-title mb-2">4 · Trigger <HelpLink Topic="cron" Title="Scheduling" /></div>
+            <TriggerEditor Kind="@JobRef.Export" JobId="job.ExportJobId" @bind-Mode="job.TriggerMode" Upstreams="upstreams" Disabled="@(!canEdit)">
+                <CronEditor @bind-Cron="job.CronExpression" @bind-TimeZoneId="job.TimeZoneId" Disabled="@(!canEdit)" />
+            </TriggerEditor>
             <div class="row g-2 mt-2">
                 <div class="col-md-8"><label class="form-label small">Job name</label><input class="form-control form-control-sm" @bind="job.Name" /></div>
                 <div class="col-md-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="act" @bind="job.IsActive" /><label class="form-check-label" for="act">Active</label></div></div>
@@ -220,6 +223,7 @@
     [SupplyParameterFromQuery] public int? FromExtract { get; set; }
 
     private ExportJobDef job = new() { ExportMode = ExportMode.AllTables, SourceSchema = null, ObjectNameTemplate = ObjectNameTemplate.DefaultAllTables, CronExpression = "0 1 * * *" };
+    private readonly HashSet<JobRef> upstreams = [];   // "after other jobs" trigger
     private bool IsNew => Id is null;
     private bool loaded, canEdit, busy, confirmDelete, selectedTableHasNoLoadId;
     private string? error, info;
@@ -264,6 +268,8 @@
                 canEdit = await Access.CanEditExportAsync(job);
                 if (servers.All(s => s.SqlServerId != job.SourceServerId) && await Repo.GetServerAsync(job.SourceServerId) is { } s) servers.Add(s);
                 tableStates = await Repo.GetExportTableStatesAsync(job.ExportJobId);
+                foreach (var d in (await Repo.GetJobDependenciesAsync()).Where(d => d.JobKind == JobRef.Export && d.JobId == job.ExportJobId))
+                    upstreams.Add(new JobRef(d.UpstreamKind, d.UpstreamId));
             }
             await LoadDbsAsync();
             await LoadTablesAsync();
@@ -370,7 +376,8 @@
             if (job.ExportMode == ExportMode.Incremental && selectedTableHasNoLoadId) errs.Add("Incremental mode requires a _LoadId column in the table.");
             if (job.ExportMode == ExportMode.AllTables && !job.ObjectNameTemplate.Contains("{Table}")) errs.Add("In All collected tables mode the object name template must contain {Table}, otherwise files would overwrite each other.");
             if (string.IsNullOrWhiteSpace(job.Bucket)) errs.Add("Bucket is required.");
-            if (!JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
+            if (job.TriggerMode == JobTriggerMode.Schedule && !JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
+            if (await Dependencies.ValidateAsync(new JobRef(JobRef.Export, job.ExportJobId), job.TriggerMode, upstreams) is { } dependencyError) errs.Add(dependencyError);
             if (errs.Count > 0) throw new InvalidOperationException(string.Join("\n", errs));
             if (!await Access.CanUseAsync(job.SourceServerId, job.SourceDatabase, "Any")) throw new InvalidOperationException("You are not allowed to use this database.");
             if (job.ExportMode == ExportMode.Query) { job.SourceTable = null; }
@@ -379,9 +386,10 @@
 
             var user = await Access.UserNameAsync();
             var id = await Repo.SaveExportJobAsync(job, user);
+            await Dependencies.SaveAsync(new JobRef(JobRef.Export, id), job.TriggerMode, upstreams, user);
             Registrar.Register(job);
             if (runNow) Registrar.RunExportNow(job, user);
-            info = runNow ? "Saved and enqueued." : "Saved; the schedule was registered in Hangfire.";
+            info = (runNow ? "Saved and enqueued. " : "Saved. ") + (job.TriggerMode == JobTriggerMode.AfterJobs ? "It starts after the selected jobs have succeeded." : "The schedule was registered in Hangfire.");
             if (IsNew) Nav.NavigateTo($"/export/{id}");
         });
     }

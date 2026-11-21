@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    SqlDataCollector-Setup.exe: installation wizard (and silent installer) for Windows servers.
+    SqlHarbor-Setup.exe: installation wizard (and silent installer) for Windows servers.
     Published as one self-contained file that embeds the self-contained application (payload.zip):
     nothing has to be installed on the target server. Build: scripts\dev.ps1 installer
   -->
@@ -13,11 +13,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <RootNamespace>SqlDataCollector.Setup</RootNamespace>
-    <AssemblyName>SqlDataCollector-Setup</AssemblyName>
+    <AssemblyName>SqlHarbor-Setup</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Version>1.0.0</Version>
-    <Product>SqlDataCollector</Product>
+    <Product>SqlHarbor</Product>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 

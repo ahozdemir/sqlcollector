@@ -8,6 +8,8 @@
     <LangVersion>latest</LangVersion>
     <InvariantGlobalization>false</InvariantGlobalization>
     <UserSecretsId>sql-data-collector</UserSecretsId>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Product>SqlHarbor</Product>
   </PropertyGroup>
 
   <ItemGroup>
