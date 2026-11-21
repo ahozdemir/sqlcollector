@@ -31,14 +31,17 @@ public static class Ui
         _ => "bg-light text-dark"
     };
 
-    public static string CheckStatusClass(string? status) => status switch
+    /// <summary>Tone of the soft status pill (.sdc-status ok|run|err|warn|neutral).</summary>
+    public static string StatusTone(string? status) => status switch
     {
-        Services.CheckStatus.Ok => "bg-success",
-        Services.CheckStatus.Missing or Services.CheckStatus.Error => "bg-danger",
-        Services.CheckStatus.Excess => "bg-warning text-dark",
-        Services.CheckStatus.Warning => "bg-info text-dark",
-        _ => "bg-light text-dark"
+        "Succeeded" or Services.CheckStatus.Ok or "Sent" => "ok",
+        "Running" => "run",
+        "Failed" or "CleanupPending" or Services.CheckStatus.Missing or Services.CheckStatus.Error => "err",
+        "PartiallyFailed" or "Abandoned" or Services.CheckStatus.Excess or Services.CheckStatus.Warning => "warn",
+        _ => "neutral"
     };
+
+    public static string CheckStatusClass(string? status) => "sdc-status " + StatusTone(status);
 
     public static string ShortError(string? err)
     {

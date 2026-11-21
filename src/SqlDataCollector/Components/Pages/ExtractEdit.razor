@@ -156,10 +156,42 @@
                     <input class="form-control form-control-sm mono" list="schemas" @bind="job.TargetSchema" @bind:after="() => schemaTouched = true" />
                     <datalist id="schemas">@foreach (var s in targetSchemas) { <option value="@s" /> }</datalist>
                 </div>
-                <div class="col-md-8">
-                    <label class="form-label small">Target table</label>
-                    <input class="form-control form-control-sm mono" @bind="job.TargetTable" disabled="@(MultiTable)" placeholder="@(MultiTable ? "source table name is used" : "")" />
-                </div>
+                @if (MultiTable)
+                {
+                    <div class="col-12">
+                        <label class="form-label small">Target tables – one job per selected table (@SelectedTables.Count())</label>
+                        <table class="table table-sm mb-0 bg-white">
+                            <thead><tr><th>Source table</th><th></th><th>Target table in <span class="mono text-lowercase">@job.TargetSchema</span></th><th>State</th></tr></thead>
+                            <tbody>
+                                @foreach (var t in SelectedTables)
+                                {
+                                    var target = TargetFor(t);
+                                    var duplicate = SelectedTables.Count(o => TargetFor(o).Equals(target, StringComparison.OrdinalIgnoreCase)) > 1;
+                                    var exists = existingTargetTables.Contains($"{job.TargetSchema}.{target}");
+                                    <tr>
+                                        <td class="mono">@t.Key</td>
+                                        <td class="text-muted">→</td>
+                                        <td class="mono">@job.TargetSchema.@target</td>
+                                        <td>
+                                            @if (duplicate) { <span class="sdc-status err">same name twice</span> }
+                                            else if (exists) { <span class="sdc-status warn">exists – @(job.SchemaPolicy == SchemaPolicy.Strict ? "must match" : "evolved")</span> }
+                                            else { <span class="sdc-status neutral">new table</span> }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <div class="form-text">Target tables keep the source table names – they are also the names of the exported CSV files. Tables with the same name
+                            in different source schemas cannot share a target schema: create them as separate jobs with different target schemas.</div>
+                    </div>
+                }
+                else
+                {
+                    <div class="col-md-8">
+                        <label class="form-label small">Target table</label>
+                        <input class="form-control form-control-sm mono" @bind="job.TargetTable" />
+                    </div>
+                }
                 <div class="col-md-6">
                     <label class="form-label small">Schema policy</label>
                     <select class="form-select form-select-sm" @bind="job.SchemaPolicy">
@@ -314,6 +346,11 @@
     private TableComparison? comparison;
 
     private bool MultiTable => IsNew && job.SourceType == SourceType.Table && selectedTables.Count > 1;
+
+    // multi-table: one job per selected table; the target table keeps the source table name (also the CSV file name of exports)
+    private HashSet<string> existingTargetTables = new(StringComparer.OrdinalIgnoreCase);
+    private List<TableInfo> SelectedTables => tables.Where(x => selectedTables.Contains(x.Key)).ToList();
+    private static string TargetFor(TableInfo t) => t.Name;
     private IEnumerable<TableInfo> FilteredTables => string.IsNullOrWhiteSpace(tableFilter) ? tables
         : tables.Where(t => t.Key.Contains(tableFilter, StringComparison.OrdinalIgnoreCase) || selectedTables.Contains(t.Key));
     private bool CanPreview => job.SourceServerId > 0 && !string.IsNullOrEmpty(job.SourceDatabase)
@@ -518,6 +555,8 @@
         comparison = null;
         if (string.IsNullOrEmpty(job.TargetDatabase)) return;
         await Safe(async () => targetSchemas = await Catalog.SchemasAsync(job.TargetServerId, job.TargetDatabase));
+        await Safe(async () => existingTargetTables = (await Catalog.TablesAsync(job.TargetServerId, job.TargetDatabase))
+            .Where(t => t.Type == "Table").Select(t => t.Key).ToHashSet(StringComparer.OrdinalIgnoreCase));
     }
 
     private async Task CompareAsync()
@@ -548,12 +587,12 @@
             if (MultiTable)
             {
                 var created = new List<string>();
-                foreach (var t in tables.Where(x => selectedTables.Contains(x.Key)))
+                foreach (var t in SelectedTables)
                 {
                     var j = Clone(job);
                     j.ExtractJobId = 0; j.SourceSchema = t.Schema; j.SourceTable = t.Name; j.ColumnList = null;
-                    j.TargetTable = t.Name;
-                    j.Name = string.IsNullOrWhiteSpace(job.Name) ? $"{job.SourceDatabase}_{t.Schema}_{t.Name}" : $"{job.Name.Trim()}_{t.Name}";
+                    j.TargetTable = TargetFor(t);
+                    j.Name = string.IsNullOrWhiteSpace(job.Name) ? $"{job.SourceDatabase}_{t.Schema}_{t.Name}" : $"{job.Name.Trim()}_{j.TargetTable}";
                     await EnsureRebuildTargetIsFreeAsync(j);
                     await Repo.SaveExtractJobAsync(j, user);
                     Registrar.Register(j);
@@ -607,6 +646,14 @@
         if (job.TargetServerId == 0 || string.IsNullOrEmpty(job.TargetDatabase)) errs.Add("Choose a target server and database.");
         if (string.IsNullOrWhiteSpace(job.TargetSchema)) errs.Add("Target schema is required.");
         if (!MultiTable && string.IsNullOrWhiteSpace(job.TargetTable)) errs.Add("Target table name is required.");
+        if (MultiTable)
+        {
+            var names = SelectedTables.Select(TargetFor).ToList();
+            var dup = names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+            if (dup.Count > 0)
+                errs.Add($"Tables with the same name in different source schemas would write to the same target table ({string.Join(", ", dup)}). " +
+                         "Select them in separate jobs with different target schemas.");
+        }
         if (!JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
         if (job.BatchSize < 100) job.BatchSize = 10000;
         if (job.CommandTimeoutSec < 30) job.CommandTimeoutSec = 3600;

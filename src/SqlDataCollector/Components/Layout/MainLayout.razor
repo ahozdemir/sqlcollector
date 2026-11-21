@@ -1,45 +1,114 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 @inject IConfiguration Config
+@inject NavigationManager Nav
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
-    <a class="navbar-brand fw-semibold" href="/">SqlDataCollector</a>
-    <AuthorizeView>
-        <Authorized>
-            <ul class="navbar-nav me-auto">
-                <li class="nav-item"><NavLink class="nav-link" href="/" Match="NavLinkMatch.All">Status</NavLink></li>
-                <li class="nav-item"><NavLink class="nav-link" href="/extract">Extract Jobs</NavLink></li>
-                <li class="nav-item"><NavLink class="nav-link" href="/export">GCS Exports</NavLink></li>
-                <li class="nav-item"><NavLink class="nav-link" href="/runs">Run History</NavLink></li>
-                <AuthorizeView Roles="Admin" Context="adminCtx">
-                    <li class="nav-item"><NavLink class="nav-link" href="/admin/servers">Servers</NavLink></li>
-                    <li class="nav-item"><NavLink class="nav-link" href="/admin/permissions">Permissions</NavLink></li>
-                    <li class="nav-item"><NavLink class="nav-link" href="/admin/alerts">Alerts</NavLink></li>
-                    <li class="nav-item"><NavLink class="nav-link" href="/admin/settings">Settings</NavLink></li>
-                    <li class="nav-item"><NavLink class="nav-link" href="/admin/audit">Audit</NavLink></li>
-                </AuthorizeView>
-                <li class="nav-item"><a class="nav-link" href="@DashboardPath" target="_blank">Hangfire ↗</a></li>
-                <li class="nav-item"><NavLink class="nav-link" href="/help">Help</NavLink></li>
-            </ul>
-            <span class="navbar-text me-3 small">
-                @context.User.Identity?.Name
-                <span class="badge bg-secondary ms-1">@string.Join(", ", context.User.FindAll(ClaimTypes.Role).Select(c => c.Value))</span>
-            </span>
-            <form method="post" action="/auth/logout" class="d-inline">
-                <AntiforgeryToken />
-                <button class="btn btn-sm btn-outline-light" type="submit">Sign out</button>
-            </form>
-        </Authorized>
-    </AuthorizeView>
-</nav>
+<AuthorizeView>
+    <Authorized>
+        <div class="sdc-shell @(navOpen ? "nav-open" : "")">
+            <aside class="sdc-sidebar">
+                <a class="sdc-brand" href="/">
+                    <span class="sdc-brand-mark" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.6" /><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" /><path d="M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6" /></svg>
+                    </span>
+                    <span>
+                        <span class="sdc-brand-name">SqlDataCollector</span>
+                        <span class="sdc-brand-sub">Data collection &amp; export</span>
+                    </span>
+                </a>
 
-<main class="container-fluid px-4 py-3">
-    @Body
-</main>
+                <nav class="sdc-nav" @onclick="() => navOpen = false">
+                    <div class="sdc-nav-group">Monitoring</div>
+                    <NavLink class="sdc-nav-link" href="/" Match="NavLinkMatch.All"><NavIcon Name="status" />Status</NavLink>
+                    <NavLink class="sdc-nav-link" href="/runs"><NavIcon Name="history" />Run history</NavLink>
+
+                    <div class="sdc-nav-group">Jobs</div>
+                    <NavLink class="sdc-nav-link" href="/extract"><NavIcon Name="extract" />Extract jobs</NavLink>
+                    <NavLink class="sdc-nav-link" href="/export"><NavIcon Name="export" />GCS exports</NavLink>
+
+                    <AuthorizeView Roles="Admin" Context="adminCtx">
+                        <div class="sdc-nav-group">Administration</div>
+                        <NavLink class="sdc-nav-link" href="/admin/servers"><NavIcon Name="servers" />Servers</NavLink>
+                        <NavLink class="sdc-nav-link" href="/admin/permissions"><NavIcon Name="permissions" />Permissions</NavLink>
+                        <NavLink class="sdc-nav-link" href="/admin/alerts"><NavIcon Name="alerts" />Alerts</NavLink>
+                        <NavLink class="sdc-nav-link" href="/admin/settings"><NavIcon Name="settings" />Settings</NavLink>
+                        <NavLink class="sdc-nav-link" href="/admin/audit"><NavIcon Name="audit" />Audit log</NavLink>
+                    </AuthorizeView>
+
+                    <div class="sdc-nav-group">Tools</div>
+                    <a class="sdc-nav-link" href="@DashboardPath" target="_blank"><NavIcon Name="hangfire" />Hangfire dashboard <span class="sdc-ext">↗</span></a>
+                    <NavLink class="sdc-nav-link" href="/help"><NavIcon Name="help" />Help</NavLink>
+                </nav>
+
+                <div class="sdc-sidebar-foot">v@(Version) · @Environment.MachineName</div>
+            </aside>
+
+            <div class="sdc-main">
+                <header class="sdc-topbar">
+                    <button class="sdc-menu-toggle" type="button" aria-label="Menu" @onclick="() => navOpen = !navOpen">
+                        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+                    </button>
+                    <div class="sdc-topbar-title">@Section</div>
+                    <div class="sdc-user">
+                        <span class="sdc-avatar" aria-hidden="true">@Initials(context.User.Identity?.Name)</span>
+                        <span class="sdc-user-text">
+                            <span class="sdc-user-name">@context.User.Identity?.Name</span>
+                            <span class="sdc-user-role">@string.Join(" · ", context.User.FindAll(ClaimTypes.Role).Select(c => c.Value))</span>
+                        </span>
+                        <form method="post" action="/auth/logout" class="ms-2">
+                            <AntiforgeryToken />
+                            <button class="btn btn-sm btn-outline-secondary" type="submit">Sign out</button>
+                        </form>
+                    </div>
+                </header>
+                <main class="sdc-content">
+                    @Body
+                </main>
+            </div>
+            <div class="sdc-backdrop" @onclick="() => navOpen = false"></div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <main class="sdc-content">@Body</main>
+    </NotAuthorized>
+</AuthorizeView>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unexpected error has occurred. <a href="." class="reload">Reload</a>
 </div>
 
 @code {
+    private bool navOpen;
     private string DashboardPath => Config["Dashboard:Path"] ?? "/hangfire";
+
+    private static readonly string Version =
+        typeof(MainLayout).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+
+    /// <summary>The area of the current page, shown in the top bar.</summary>
+    private string Section
+    {
+        get
+        {
+            var path = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0];
+            return path switch
+            {
+                "/" => "Monitoring",
+                _ when path.StartsWith("/runs", StringComparison.OrdinalIgnoreCase) => "Monitoring",
+                _ when path.StartsWith("/extract", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/export", StringComparison.OrdinalIgnoreCase) => "Jobs",
+                _ when path.StartsWith("/admin", StringComparison.OrdinalIgnoreCase) => "Administration",
+                _ => "SqlDataCollector"
+            };
+        }
+    }
+
+    private static string Initials(string? name)
+    {
+        var n = (name ?? "?").Split('\\').Last();
+        var parts = n.Split(['.', ' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries);
+        return (parts.Length >= 2 ? $"{parts[0][0]}{parts[1][0]}" : n[..Math.Min(2, n.Length)]).ToUpperInvariant();
+    }
+
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) => InvokeAsync(StateHasChanged);
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
 }

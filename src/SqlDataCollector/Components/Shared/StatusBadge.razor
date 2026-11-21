@@ -1,2 +1,2 @@
-<span class="badge @Ui.StatusClass(Status)">@(Status ?? "–")</span>
+<span class="sdc-status @Ui.StatusTone(Status)">@(Status ?? "–")</span>
 @code { [Parameter] public string? Status { get; set; } }

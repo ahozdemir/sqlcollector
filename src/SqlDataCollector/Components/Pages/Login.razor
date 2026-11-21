@@ -6,16 +6,17 @@
 
 <PageTitle>Sign in – SqlDataCollector</PageTitle>
 
-<div class="row justify-content-center">
-    <div class="col-md-5 col-lg-4">
-        <h1 class="h3 mb-4 text-center">SqlDataCollector</h1>
+<div>
+    <div>
+        <h1 class="visually-hidden">Sign in</h1>
 
         @if (!string.IsNullOrEmpty(Error)) { <div class="alert alert-danger">@ErrorText</div> }
         @if (LoggedOut is not null) { <div class="alert alert-info">You have been signed out.</div> }
 
         <div class="card mb-3">
             <div class="card-body text-center">
-                <p class="text-muted small mb-3">Sign in with your corporate (Active Directory) account.</p>
+                <div class="fw-semibold mb-1">Sign in</div>
+                <p class="text-muted small mb-3">Use your corporate (Active Directory) account.</p>
                 <a class="btn btn-primary w-100" href="/auth/windows?returnUrl=@Uri.EscapeDataString(ReturnUrl ?? "/")">Sign in with Windows (AD)</a>
             </div>
         </div>

@@ -131,7 +131,7 @@
             <span class="ms-auto"></span>
             @foreach (var s in g.GroupBy(r => r.Status).OrderBy(s => StatusOrder(s.Key)))
             {
-                <span class="badge @Ui.CheckStatusClass(s.Key)">@s.Count() @s.Key</span>
+                <span class="@Ui.CheckStatusClass(s.Key)">@s.Count() @s.Key</span>
             }
         </div>
         @if (visible.Count == 0)
@@ -151,7 +151,7 @@
                             <td class="mono">@(r.DatabaseName ?? "–")</td>
                             <td class="mono">@(r.LoginName ?? "–")</td>
                             <td>@r.Item</td>
-                            <td><span class="badge @Ui.CheckStatusClass(r.Status)">@r.Status</span></td>
+                            <td><span class="@Ui.CheckStatusClass(r.Status)">@r.Status</span></td>
                             <td style="max-width:520px">@r.Detail</td>
                         </tr>
                     }

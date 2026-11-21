@@ -19,9 +19,37 @@
     </div>
 }
 
+<div class="sdc-kpis">
+    <div class="sdc-kpi @(servers.Count == 0 ? "err" : "ok")">
+        <div class="sdc-kpi-label">Workers online</div>
+        <div class="sdc-kpi-value">@servers.Count</div>
+        <div class="sdc-kpi-sub">@servers.Sum(s => s.WorkersCount) worker threads</div>
+    </div>
+    <div class="sdc-kpi">
+        <div class="sdc-kpi-label">Active jobs</div>
+        <div class="sdc-kpi-value">@rows.Count(r => r.IsActive)</div>
+        <div class="sdc-kpi-sub">@rows.Count(r => r.IsActive && r.JobKind == "Extract") extract · @rows.Count(r => r.IsActive && r.JobKind == "Export") export</div>
+    </div>
+    <div class="sdc-kpi ok">
+        <div class="sdc-kpi-label">Last run succeeded</div>
+        <div class="sdc-kpi-value">@rows.Count(r => r.LastStatus == "Succeeded")</div>
+        <div class="sdc-kpi-sub">of @rows.Count jobs</div>
+    </div>
+    <div class="sdc-kpi @(Problems > 0 ? "err" : "")">
+        <div class="sdc-kpi-label">Last run with problems</div>
+        <div class="sdc-kpi-value">@Problems</div>
+        <div class="sdc-kpi-sub">failed, partial or abandoned</div>
+    </div>
+    <div class="sdc-kpi run">
+        <div class="sdc-kpi-label">Queue</div>
+        <div class="sdc-kpi-value">@processing <span class="fs-6 text-muted fw-normal">running</span></div>
+        <div class="sdc-kpi-sub">@enqueued waiting · @failed failed in Hangfire (24 h)</div>
+    </div>
+</div>
+
 <div class="card mb-3">
     <div class="card-body py-2">
-        <div class="section-title mb-1">Hangfire worker servers <HelpLink Topic="architecture" Title="Web and Worker roles" /></div>
+        <div class="section-title mb-2">Hangfire worker servers <HelpLink Topic="architecture" Title="Web and Worker roles" /></div>
         @if (servers.Count == 0)
         {
             <div class="text-danger small">No active worker! Jobs stay in the queue. Check that a Worker (<code>Collector:Roles = Worker</code>) or the shared Hangfire host is running and listens to the <code>sdc_*</code> queues.</div>
@@ -30,13 +58,17 @@
         {
             @foreach (var s in servers)
             {
-                <span class="badge bg-success-subtle text-success-emphasis border me-2">@s.Name · @s.WorkersCount workers · queues: @string.Join(",", s.Queues) · last heartbeat @Ui.Local(s.Heartbeat)</span>
+                <div class="d-flex flex-wrap align-items-center gap-2 small py-1">
+                    <span class="sdc-status ok">online</span>
+                    <span class="mono">@s.Name</span>
+                    <span class="text-muted">@s.WorkersCount workers · queues @string.Join(", ", s.Queues) · heartbeat @Ui.Local(s.Heartbeat)</span>
+                </div>
             }
         }
-        <div class="small text-muted mt-1">Enqueued: @enqueued · Processing: @processing · Failed (last 24 h): @failed</div>
     </div>
 </div>
 
+<div class="section-title mb-2 mt-4">Jobs – last run</div>
 <table class="table table-sm table-hover bg-white">
     <thead class="table-light">
         <tr><th>Type</th><th>Job</th><th>Schedule</th><th>Last status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th>Error</th></tr>
@@ -62,6 +94,7 @@
     private IReadOnlyList<JobStatusRow> rows = [];
     private IList<Hangfire.Storage.Monitoring.ServerDto> servers = [];
     private long enqueued, processing, failed;
+    private int Problems => rows.Count(r => r.LastStatus is "Failed" or "PartiallyFailed" or "Abandoned" or "CleanupPending");
 
     protected override Task OnInitializedAsync() => LoadAsync();
 

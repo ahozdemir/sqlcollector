@@ -1,2 +1,16 @@
 @inherits LayoutComponentBase
-<main class="container py-5">@Body</main>
+@* Sign-in and access-denied pages: brand on the dark band, content card centred *@
+<div class="sdc-login">
+    <div class="sdc-login-box">
+        <div class="sdc-login-brand">
+            <span class="sdc-brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.6" /><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" /><path d="M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6" /></svg>
+            </span>
+            <span>
+                <span class="sdc-brand-name">SqlDataCollector</span>
+                <span class="sdc-brand-sub">Data collection &amp; export</span>
+            </span>
+        </div>
+        @Body
+    </div>
+</div>
