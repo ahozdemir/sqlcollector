@@ -6,6 +6,8 @@ public enum LoadMode : byte { Append = 1, Replace = 2, Incremental = 3, Merge = 
 
 public enum ExportMode : byte { Full = 1, Incremental = 2, Query = 3, AllTables = 4 }
 
+public enum ExportFileFormat : byte { Csv = 1, Parquet = 2 }
+
 public enum QuoteMode : byte { Minimal = 0, AllText = 1, All = 2 }
 
 public enum SchemaPolicy : byte { Strict = 1, Evolve = 2 }
@@ -99,6 +101,8 @@ public sealed class ExportJobDef
     public string LineEnding { get; set; } = "LF";
     public bool Utf8Bom { get; set; }
     public bool Gzip { get; set; }  // gzip the files uploaded to GCS (default: plain CSV); the local archive is always gzip
+    public ExportFileFormat FileFormat { get; set; } = ExportFileFormat.Csv;
+    public string ParquetCompression { get; set; } = "Snappy";   // Snappy, Zstd, Gzip, None
     public int? MaxRowsPerFile { get; set; }
     public bool UploadWhenEmpty { get; set; } = true;
     public bool WriteManifest { get; set; } = true;

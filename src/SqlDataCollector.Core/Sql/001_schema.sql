@@ -452,3 +452,14 @@ CREATE TABLE etl.MaskingRule (
     ModifiedAtUtc  datetime2(3) NOT NULL CONSTRAINT DF_MaskingRule_Modified DEFAULT (SYSUTCDATETIME())
 );
 GO
+
+/* ---------------- Export file format ----------------
+   FileFormat: 1 = CSV (Delimiter, QuoteMode, ... apply), 2 = Parquet (typed columns, compressed inside the file;
+   Gzip/Delimiter/QuoteMode/NullValue/LineEnding/Utf8Bom do not apply). ParquetCompression: Snappy, Zstd, Gzip, None. */
+IF COL_LENGTH(N'etl.ExportJob', N'FileFormat') IS NULL
+    ALTER TABLE etl.ExportJob ADD FileFormat tinyint NOT NULL CONSTRAINT DF_ExportJob_FileFormat DEFAULT (1)
+        CONSTRAINT CK_ExportJob_FileFormat CHECK (FileFormat IN (1,2));
+IF COL_LENGTH(N'etl.ExportJob', N'ParquetCompression') IS NULL
+    ALTER TABLE etl.ExportJob ADD ParquetCompression varchar(10) NOT NULL CONSTRAINT DF_ExportJob_ParquetCompression DEFAULT ('Snappy')
+        CONSTRAINT CK_ExportJob_ParquetCompression CHECK (ParquetCompression IN ('Snappy','Zstd','Gzip','None'));
+GO

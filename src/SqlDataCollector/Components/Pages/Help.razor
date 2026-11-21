@@ -239,13 +239,24 @@
         </section>
 
         <section id="csv-format">
-            <h2>CSV format</h2>
+            <h2>File formats: CSV and Parquet</h2>
+            <p>Each export job writes <b>CSV</b> or <b>Parquet</b> files (section <i>3 · File format</i>). Masking rules and the export guard apply to both.</p>
+            <h3>CSV</h3>
             <ul>
                 <li>RFC 4180: fields containing the delimiter, quotes or line breaks are quoted; quotes are doubled.</li>
                 <li>NULL is written as the <i>NULL value</i> (default empty); an empty string is written as <code>""</code> so the two stay distinguishable.</li>
                 <li>Dates: <code>yyyy-MM-dd HH:mm:ss.fffffff</code> (trailing zeros removed), datetimeoffset with offset, bit as 1/0, binary as 0x… hex.</li>
                 <li>decimal(38,x) values are written exactly. Text is UTF-8 (optional BOM for Excel). Uploaded files are plain CSV by default; the local archive is gzip.</li>
                 <li><i>Max rows per file</i> splits large tables into parts; every part has a header row.</li>
+            </ul>
+            <h3>Parquet</h3>
+            <ul>
+                <li>Columnar, typed and compressed inside the file (<b>Snappy</b> by default, <b>Zstd</b> for smaller files, Gzip or none). BigQuery (<code>bq load --source_format=PARQUET</code>), Spark, Databricks and pandas read it directly – no delimiter, quoting or NULL conventions to agree on.</li>
+                <li>Types: bit → boolean; tinyint/smallint/int → int32; bigint → int64; real/float → float/double; decimal and money → DECIMAL with the column's precision and scale, exact (up to 38 digits);
+                    date → DATE; datetime/datetime2 → TIMESTAMP in microseconds (the 7th digit of datetime2 is dropped); datetimeoffset → TIMESTAMP in UTC; binary/rowversion → bytes;
+                    time, uniqueidentifier, xml and text types → string; masked columns → string.</li>
+                <li>Rows are written in row groups of <code>Collector:ParquetRowGroupSize</code> rows (100,000; memory per export ≈ row group × row width). <i>Max rows per file</i> splits the output into several files.</li>
+                <li>Object names end in <code>.parquet</code> (a <code>.csv</code> ending of the name template is replaced). The local archive keeps the Parquet files as they are (already compressed).</li>
             </ul>
         </section>
 
@@ -487,7 +498,7 @@
         ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
         ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
-        ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "CSV format"),
+        ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")

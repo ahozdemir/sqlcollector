@@ -41,6 +41,8 @@ public sealed class CollectorOptions
 
     /// <summary>Rows deleted per batch during retention and cleanup.</summary>
     public int DeleteBatchSize { get; set; } = 50_000;
+    /// <summary>Rows per Parquet row group (memory per export ≈ row group × row width).</summary>
+    public int ParquetRowGroupSize { get; set; } = 100_000;
 
     /// <summary>Compression for newly created target tables: NONE | ROW | PAGE.</summary>
     public string TargetTableCompression { get; set; } = "PAGE";

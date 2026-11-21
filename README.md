@@ -90,6 +90,10 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
   (*PartiallyFailed*). One run manifest in `…/_manifests/`.
 - **Single table** incremental or full, **Custom query** (`@RunDate`, `@RunAtUtc`)
 - A load that is still running is never exported half-done
+- **File format per job: CSV or Parquet.** Parquet keeps the column types (int/bigint, exact decimals up to 38 digits via
+  BigDecimal, date, timestamp in microseconds, datetimeoffset as UTC, time, binary; text for the rest and for masked columns),
+  compresses inside the file (Snappy default, Zstd, Gzip, none), writes row groups of `Collector:ParquetRowGroupSize` rows
+  (100,000) and splits by max rows per file; object names end in `.parquet`. Read directly by BigQuery, Spark, Databricks, pandas.
 - RFC 4180 CSV: delimiter, quoting, LF/CRLF, NULL value, UTF-8 BOM, split by max rows per file
 - **Uploaded to GCS as plain CSV** (optional per job: upload gzip); the **local archive is always `.csv.gz`**
 - Object names with tokens `{Name} {Database} {Schema} {Table} {Date} {DateCompact} {Time} {Part}`; default

@@ -143,7 +143,39 @@
         </div></div>
 
         <div class="card mb-3"><div class="card-body">
-            <div class="section-title mb-2">3 · CSV format <HelpLink Topic="csv-format" Title="CSV format" /></div>
+            <div class="section-title mb-2">3 · File format <HelpLink Topic="csv-format" Title="CSV and Parquet" /></div>
+            <div class="btn-group btn-group-sm mb-2" role="group" aria-label="File format">
+                <input type="radio" class="btn-check" name="fileformat" id="ff-csv" autocomplete="off" checked="@(job.FileFormat == ExportFileFormat.Csv)" @onchange="() => job.FileFormat = ExportFileFormat.Csv" />
+                <label class="btn btn-outline-secondary" for="ff-csv">CSV</label>
+                <input type="radio" class="btn-check" name="fileformat" id="ff-parquet" autocomplete="off" checked="@(job.FileFormat == ExportFileFormat.Parquet)" @onchange="() => job.FileFormat = ExportFileFormat.Parquet" />
+                <label class="btn btn-outline-secondary" for="ff-parquet">Parquet</label>
+            </div>
+            @if (job.FileFormat == ExportFileFormat.Parquet)
+            {
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <label class="form-label small">Compression</label>
+                        <select class="form-select form-select-sm" @bind="job.ParquetCompression">
+                            <option value="Snappy">Snappy (fast, default)</option>
+                            <option value="Zstd">Zstd (smaller files)</option>
+                            <option value="Gzip">Gzip</option>
+                            <option value="None">None</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Max rows per file</label>
+                        <input type="number" min="1000" class="form-control form-control-sm" @bind="job.MaxRowsPerFile" placeholder="single file" />
+                    </div>
+                    <div class="col-md-5 d-flex flex-wrap gap-3 align-items-end small">
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="mfp" @bind="job.WriteManifest" /><label class="form-check-label" for="mfp">manifest.json</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="uep" @bind="job.UploadWhenEmpty" /><label class="form-check-label" for="uep">Upload a file without rows when empty</label></div>
+                    </div>
+                    <div class="col-12 small text-muted">Typed columns (integers, exact decimals up to 38 digits, dates, timestamps, binary) compressed inside the file –
+                        BigQuery, Spark, Databricks and pandas read them directly. Object names end in <span class="mono">.parquet</span>; masked columns are text.</div>
+                </div>
+            }
+            else
+            {
             <div class="row g-2">
                 <div class="col-md-3">
                     <label class="form-label small">Delimiter</label>
@@ -180,6 +212,7 @@
                     <div class="form-check"><input class="form-check-input" type="checkbox" id="ue" @bind="job.UploadWhenEmpty" /><label class="form-check-label" for="ue">Upload header-only file when empty</label></div>
                 </div>
             </div>
+            }
         </div></div>
 
         <div class="card"><div class="card-body">
@@ -242,7 +275,7 @@
             var sample = job.ExportMode == ExportMode.AllTables ? collected.FirstOrDefault() : null;
             var n = ObjectNameTemplate.Render(job.ObjectNameTemplate, string.IsNullOrEmpty(job.Name) ? "job" : job.Name, job.SourceDatabase,
                 sample?.SchemaName ?? job.SourceSchema, sample?.TableName ?? job.SourceTable, local, "0001");
-            return job.Gzip && !n.EndsWith(".gz") ? n + ".gz" : n;
+            return ObjectNameTemplate.WithExtension(n, job);
         }
     }
 

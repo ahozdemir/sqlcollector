@@ -175,6 +175,9 @@ public sealed partial class CollectorFixture : IAsyncLifetime
     public Task<string> DownloadTextAsync(string objectName) =>
         Http.GetStringAsync($"{GcsBaseUrl}/storage/v1/b/{Bucket}/o/{Uri.EscapeDataString(objectName)}?alt=media");
 
+    public Task<byte[]> DownloadBytesAsync(string objectName) =>
+        Http.GetByteArrayAsync($"{GcsBaseUrl}/storage/v1/b/{Bucket}/o/{Uri.EscapeDataString(objectName)}?alt=media");
+
     private static async Task RunScriptAsync(string connectionString, string script)
     {
         await using var c = new SqlConnection(connectionString);

@@ -31,7 +31,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                e.SourceSchema, e.SourceTable, e.SourceQuery, e.ColumnList, e.IncludeTechnicalColumns, e.CronExpression,
                e.TimeZoneId, e.Bucket, e.ObjectNameTemplate, e.Delimiter, e.QuoteMode, e.NullValue, e.LineEnding,
                e.Utf8Bom, e.Gzip, e.MaxRowsPerFile, e.UploadWhenEmpty, e.WriteManifest, e.CommandTimeoutSec,
-               e.NotifyEmails, e.TriggerMode, e.IsActive, e.CreatedBy, e.ModifiedBy, e.ModifiedAtUtc
+               e.NotifyEmails, e.FileFormat, e.ParquetCompression, e.TriggerMode, e.IsActive, e.CreatedBy, e.ModifiedBy, e.ModifiedAtUtc
         FROM etl.ExportJob e
         JOIN etl.SqlServer s ON s.SqlServerId = e.SourceServerId
         """;
@@ -330,11 +330,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             e.ExportJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExportJob (Name, ExportMode, SourceServerId, SourceDatabase, SourceSchema, SourceTable, SourceQuery, ColumnList,
                     IncludeTechnicalColumns, CronExpression, TimeZoneId, Bucket, ObjectNameTemplate, Delimiter, QuoteMode, NullValue,
-                    LineEnding, Utf8Bom, Gzip, MaxRowsPerFile, UploadWhenEmpty, WriteManifest, CommandTimeoutSec, NotifyEmails, TriggerMode, IsActive, CreatedBy, ModifiedBy)
+                    LineEnding, Utf8Bom, Gzip, MaxRowsPerFile, UploadWhenEmpty, WriteManifest, CommandTimeoutSec, NotifyEmails, FileFormat, ParquetCompression, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExportJobId
                 VALUES (@Name, @ExportMode, @SourceServerId, @SourceDatabase, @SourceSchema, @SourceTable, @SourceQuery, @ColumnList,
                     @IncludeTechnicalColumns, @CronExpression, @TimeZoneId, @Bucket, @ObjectNameTemplate, @Delimiter, @QuoteMode, @NullValue,
-                    @LineEnding, @Utf8Bom, @Gzip, @MaxRowsPerFile, @UploadWhenEmpty, @WriteManifest, @CommandTimeoutSec, @NotifyEmails, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
+                    @LineEnding, @Utf8Bom, @Gzip, @MaxRowsPerFile, @UploadWhenEmpty, @WriteManifest, @CommandTimeoutSec, @NotifyEmails, @FileFormat, @ParquetCompression, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, e);
         }
         else
@@ -346,7 +346,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                     Bucket = @Bucket, ObjectNameTemplate = @ObjectNameTemplate, Delimiter = @Delimiter, QuoteMode = @QuoteMode,
                     NullValue = @NullValue, LineEnding = @LineEnding, Utf8Bom = @Utf8Bom, Gzip = @Gzip, MaxRowsPerFile = @MaxRowsPerFile,
                     UploadWhenEmpty = @UploadWhenEmpty, WriteManifest = @WriteManifest, CommandTimeoutSec = @CommandTimeoutSec,
-                    NotifyEmails = @NotifyEmails, TriggerMode = @TriggerMode, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
+                    NotifyEmails = @NotifyEmails, FileFormat = @FileFormat, ParquetCompression = @ParquetCompression, TriggerMode = @TriggerMode, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExportJobId = @ExportJobId;
                 """, e);
         }

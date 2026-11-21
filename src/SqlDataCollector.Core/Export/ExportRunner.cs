@@ -44,6 +44,21 @@ public static class ObjectNameTemplate
         return slash >= 0 ? prefix[..(slash + 1)] : "";
     }
 
+    /// <summary>
+    /// Final object name for the file format: Parquet files end in .parquet (a ".csv" / ".csv.gz" ending of the template is replaced),
+    /// gzip-uploaded CSV files end in .gz.
+    /// </summary>
+    public static string WithExtension(string name, ExportJobDef job)
+    {
+        if (job.FileFormat == ExportFileFormat.Parquet)
+        {
+            foreach (var ext in new[] { ".csv.gz", ".csv", ".gz" })
+                if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) { name = name[..^ext.Length]; break; }
+            return name.EndsWith(".parquet", StringComparison.OrdinalIgnoreCase) ? name : name + ".parquet";
+        }
+        return job.Gzip && !name.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? name + ".gz" : name;
+    }
+
     public static string Sanitize(string s) =>
         new(s.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_').ToArray());
 }
@@ -309,11 +324,14 @@ public sealed class ExportRunner(
         List<CsvPart> parts;
         IReadOnlyList<string> columns;
         var swWrite = Stopwatch.StartNew();
-        using (var writer = new CsvPartWriter(dir, baseName, format, job.MaxRowsPerFile, reader, masks, sampler))
+        bool parquet = job.FileFormat == ExportFileFormat.Parquet;
+        await using (IExportPartWriter writer = parquet
+            ? new ParquetPartWriter(dir, baseName, ParquetCompression(job.ParquetCompression), job.MaxRowsPerFile, options.Value.ParquetRowGroupSize, reader, masks, sampler)
+            : new CsvPartWriter(dir, baseName, format, job.MaxRowsPerFile, reader, masks, sampler))
         {
-            while (await reader.ReadAsync(ct)) writer.WriteRow(reader);
-            if (writer.TotalRows == 0 && job.UploadWhenEmpty) writer.EnsureAtLeastOnePart();
-            writer.Complete();
+            while (await reader.ReadAsync(ct)) await writer.WriteRowAsync(reader, ct);
+            if (writer.TotalRows == 0 && job.UploadWhenEmpty) await writer.EnsureAtLeastOnePartAsync(ct);
+            await writer.CompleteAsync(ct);
             parts = writer.Parts;
             columns = writer.Header;
         }
@@ -339,20 +357,28 @@ public sealed class ExportRunner(
         foreach (var part in parts)
         {
             var name = ObjectNameTemplate.Render(job.ObjectNameTemplate, job.Name, job.SourceDatabase, schema, table, local, part.Number.ToString("0000"));
-            part.ObjectName = job.Gzip && !name.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? name + ".gz" : name;
-            var contentType = job.Gzip ? "application/gzip" : "text/csv; charset=utf-8";
+            part.ObjectName = ObjectNameTemplate.WithExtension(name, job);
+            var contentType = parquet ? "application/vnd.apache.parquet" : job.Gzip ? "application/gzip" : "text/csv; charset=utf-8";
             await uploader.UploadFileAsync(job.Bucket, part.ObjectName, part.LocalPath, contentType, ct);
         }
         var uploadSec = swUpload.Elapsed.TotalSeconds;
 
-        // Local archive is always gzip-compressed, independent of what was uploaded (plain CSV by default).
-        // Compressed only after a successful upload so the upload is never delayed.
-        if (options.Value.KeepLocalFiles)
+        // Local CSV archive is always gzip-compressed, independent of what was uploaded (plain CSV by default).
+        // Compressed only after a successful upload so the upload is never delayed. Parquet is already compressed.
+        if (options.Value.KeepLocalFiles && !parquet)
             foreach (var part in parts.Where(p => !p.LocalPath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)))
                 await GzipInPlaceAsync(part.LocalPath, ct);
 
         return new Dataset(parts, columns, writeSec, uploadSec, masks.Where(m => m is not null).Select(m => m!.Describe()).ToList(), warnings);
     }
+
+    private static Parquet.CompressionMethod ParquetCompression(string? name) => name?.ToLowerInvariant() switch
+    {
+        "zstd" => Parquet.CompressionMethod.Zstd,
+        "gzip" => Parquet.CompressionMethod.Gzip,
+        "none" => Parquet.CompressionMethod.None,
+        _ => Parquet.CompressionMethod.Snappy
+    };
 
     /// <summary>Compresses file.csv to file.csv.gz (via a temp file) and deletes the original.</summary>
     private static async Task GzipInPlaceAsync(string path, CancellationToken ct)

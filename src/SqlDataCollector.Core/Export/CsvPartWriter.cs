@@ -21,7 +21,7 @@ public sealed class CsvPart
 /// RFC 4180 compliant streaming CSV writer. With MaxRowsPerFile set
 /// it splits output into parts; each part starts with the header row.
 /// </summary>
-public sealed class CsvPartWriter : IDisposable
+public sealed class CsvPartWriter : IDisposable, IExportPartWriter
 {
     private readonly string _directory;
     private readonly string _baseName;
@@ -140,6 +140,11 @@ public sealed class CsvPartWriter : IDisposable
     }
 
     public void Dispose() => CloseCurrent();
+
+    ValueTask IExportPartWriter.WriteRowAsync(SqlDataReader reader, CancellationToken ct) { WriteRow(reader); return ValueTask.CompletedTask; }
+    ValueTask IExportPartWriter.EnsureAtLeastOnePartAsync(CancellationToken ct) { EnsureAtLeastOnePart(); return ValueTask.CompletedTask; }
+    ValueTask IExportPartWriter.CompleteAsync(CancellationToken ct) { Complete(); return ValueTask.CompletedTask; }
+    ValueTask IAsyncDisposable.DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
 }
 
 /// <summary>Culture-invariant value formatting by SQL type.</summary>
