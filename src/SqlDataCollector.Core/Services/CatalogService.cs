@@ -12,7 +12,8 @@ public sealed record TableInfo(string Schema, string Name, string Type, long? Ro
     public string Key => $"{Schema}.{Name}";
 }
 
-public sealed record ColumnInfo(string Name, string TypeDeclaration, bool Nullable, bool IsIdentity);
+/// <summary>A source column; KeyOrdinal = position in the primary key (0 = not part of it).</summary>
+public sealed record ColumnInfo(string Name, string TypeDeclaration, bool Nullable, bool IsIdentity, int KeyOrdinal = 0);
 
 public sealed record PreviewResult(IReadOnlyList<string> Columns, IReadOnlyList<string?[]> Rows, IReadOnlyList<ColumnInfo> Schema);
 
@@ -149,7 +150,10 @@ public sealed class CatalogService(SqlConnectionFactory factory, MetadataReposit
         await using var c = await factory.OpenAsync(await ServerAsync(serverId), database, forWrite: false, ct);
         await using var cmd = c.CreateCommand();
         cmd.CommandText = """
-            SELECT c.name, t.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity
+            SELECT c.name, t.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity,
+                   CAST(ISNULL((SELECT ic.key_ordinal FROM sys.indexes i
+                                JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                                WHERE i.object_id = c.object_id AND i.is_primary_key = 1 AND ic.column_id = c.column_id), 0) AS int)
             FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id
             WHERE c.object_id = OBJECT_ID(@n) ORDER BY c.column_id;
             """;
@@ -158,7 +162,7 @@ public sealed class CatalogService(SqlConnectionFactory factory, MetadataReposit
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
             list.Add(new(r.GetString(0), SqlTypeMapper.Declaration(r.GetString(1), r.GetInt16(2), r.GetByte(3), r.GetByte(4)),
-                r.GetBoolean(5), r.GetBoolean(6)));
+                r.GetBoolean(5), r.GetBoolean(6), r.GetInt32(7)));
         return list;
     }
 
@@ -197,7 +201,7 @@ public sealed class CatalogService(SqlConnectionFactory factory, MetadataReposit
         var cmd = c.CreateCommand();
         cmd.CommandText = SourceCommandBuilder.BuildSql(job, hasWatermark: false);
         cmd.CommandTimeout = UiTimeoutSec;
-        if (job.LoadMode == LoadMode.Incremental && job.SourceType == SourceType.Query)
+        if (job.UsesWatermark() && job.SourceType == SourceType.Query)
             cmd.Parameters.Add(Watermark.ToParameter(SourceCommandBuilder.WatermarkParam, null, null));
         return cmd;
     }

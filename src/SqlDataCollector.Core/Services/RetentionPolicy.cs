@@ -2,6 +2,7 @@ using System.Globalization;
 using Hangfire;
 using Microsoft.Extensions.Options;
 using SqlDataCollector.Infrastructure;
+using SqlDataCollector.Models;
 using SqlDataCollector.Options;
 
 namespace SqlDataCollector.Services;
@@ -26,8 +27,8 @@ public sealed record RetentionPolicy(
     /// </summary>
     public int? EffectiveDays(int? jobDays, Models.LoadMode loadMode = Models.LoadMode.Append)
     {
-        // Replace keeps only the latest successful load: retention does not apply (and must never empty a paused job's table)
-        if (loadMode == Models.LoadMode.Replace) return null;
+        // Replace keeps only the latest successful load, Merge the current state: retention by age does not apply (and must never empty a paused job's table)
+        if (loadMode.KeepsCurrentStateOnly()) return null;
         if (jobDays is null or <= 0) return AllowKeepForever ? null : DefaultDays ?? MaxDays;
         return MaxDays is { } max ? Math.Min(jobDays.Value, max) : jobDays;
     }
@@ -35,7 +36,7 @@ public sealed record RetentionPolicy(
     /// <summary>Server-side check when an extract job is saved; null = allowed.</summary>
     public string? ValidateJob(int? requested, int? current, bool isNew, bool isAdmin, Models.LoadMode loadMode = Models.LoadMode.Append)
     {
-        if (loadMode == Models.LoadMode.Replace) return null;   // retention does not apply; the editor clears it
+        if (loadMode.KeepsCurrentStateOnly()) return null;   // retention does not apply; the editor clears it
         if (requested is <= 0) return "Retention must be at least 1 day (empty = keep forever).";
         if (!isAdmin && !EditorsMayChange)
         {

@@ -28,7 +28,7 @@ public sealed class RetentionRunner(
 
         var policy = await settings.GetRetentionPolicyAsync();
         var jobs = (await repo.GetExtractJobsAsync()).Select(j => (Job: j, Days: policy.EffectiveDays(j.RetentionDays, j.LoadMode))).ToList();
-        foreach (var (job, days) in jobs.Where(x => x.Job.LoadMode != LoadMode.Replace && x.Days != x.Job.RetentionDays))
+        foreach (var (job, days) in jobs.Where(x => !x.Job.LoadMode.KeepsCurrentStateOnly() && x.Days != x.Job.RetentionDays))
             logger.LogInformation("Retention {Name}: policy applies {Days} instead of the job's {JobDays}.", job.Name,
                 days?.ToString() ?? "keep forever", job.RetentionDays?.ToString() ?? "keep forever");
         var servers = (await repo.GetServersAsync()).ToDictionary(s => s.SqlServerId);
@@ -160,6 +160,14 @@ public sealed class JobSynchronizer(
             // The load may have finished after the list was read: re-check the status after acquiring the lock
             var status = await repo.GetLoadStatusAsync(load.LoadRunId);
             if (status is not ("Running" or "CleanupPending")) continue;
+
+            // a merge is applied in one transaction: nothing half-written to remove, and its committed rows must stay
+            if ((await repo.GetExtractJobAsync(load.ExtractJobId))?.LoadMode == LoadMode.Merge)
+            {
+                await repo.MarkLoadAbandonedAsync(load.LoadRunId, "Interrupted merge: nothing to roll back; the next run applies the source rows again.");
+                logger.LogWarning("Interrupted merge marked as abandoned: LoadId={LoadId}", load.LoadRunId);
+                continue;
+            }
 
             try
             {

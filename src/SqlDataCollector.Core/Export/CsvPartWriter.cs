@@ -31,6 +31,8 @@ public sealed class CsvPartWriter : IDisposable
     private readonly Func<SqlDataReader, int, string>[] _formatters;
     private readonly bool[] _isText;
     private readonly char[] _specialChars;
+    private readonly Privacy.ColumnMask?[] _masks;
+    private readonly Privacy.PiiSampler? _sampler;
 
     private StreamWriter? _writer;
     private CsvPart? _current;
@@ -38,7 +40,10 @@ public sealed class CsvPartWriter : IDisposable
     public List<CsvPart> Parts { get; } = [];
     public long TotalRows { get; private set; }
 
-    public CsvPartWriter(string directory, string baseName, CsvFormat format, long? maxRowsPerFile, SqlDataReader reader)
+    /// <param name="masks">Per column: the masking applied to the value (null = written as is).</param>
+    /// <param name="sampler">Collects the first unmasked values for the data protection guard.</param>
+    public CsvPartWriter(string directory, string baseName, CsvFormat format, long? maxRowsPerFile, SqlDataReader reader,
+        Privacy.ColumnMask?[]? masks = null, Privacy.PiiSampler? sampler = null)
     {
         _directory = directory;
         _baseName = baseName;
@@ -46,7 +51,10 @@ public sealed class CsvPartWriter : IDisposable
         _maxRowsPerFile = maxRowsPerFile is > 0 ? maxRowsPerFile : null;
         _header = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
         _formatters = Enumerable.Range(0, reader.FieldCount).Select(i => CsvValueFormatter.For(reader.GetDataTypeName(i))).ToArray();
-        _isText = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetFieldType(i) == typeof(string)).ToArray();
+        _masks = masks ?? new Privacy.ColumnMask?[reader.FieldCount];
+        _sampler = sampler;
+        // a masked value is text
+        _isText = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetFieldType(i) == typeof(string) || _masks[i] is not null).ToArray();
         _specialChars = (format.Delimiter + "\"\r\n").Distinct().ToArray();
         Directory.CreateDirectory(directory);
     }
@@ -63,8 +71,17 @@ public sealed class CsvPartWriter : IDisposable
         {
             if (i > 0) w.Write(_format.Delimiter);
             if (reader.IsDBNull(i)) { w.Write(_format.NullValue); continue; }
-            WriteField(w, _formatters[i](reader, i), _isText[i]);
+            var value = _formatters[i](reader, i);
+            if (_masks[i] is { } mask)
+            {
+                var masked = mask.Apply(value);
+                if (masked is null) { w.Write(_format.NullValue); continue; }
+                value = masked;
+            }
+            else if (_sampler is { Wants: true }) _sampler.Add(i, value);
+            WriteField(w, value, _isText[i]);
         }
+        _sampler?.EndRow();
         w.Write(_format.NewLine);
         _current!.Rows++;
         TotalRows++;

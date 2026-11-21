@@ -20,7 +20,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                j.SourceType, j.SourceSchema, j.SourceTable, j.ColumnList, j.FilterClause, j.SourceQuery, j.UseNoLock,
                j.LoadMode, j.WatermarkColumn, j.SchemaPolicy, j.PartitionDaily, j.TargetServerId, ts.Name AS TargetServerName, j.TargetDatabase,
                j.TargetSchema, j.TargetTable, j.CronExpression, j.TimeZoneId, j.RetentionDays, j.CommandTimeoutSec,
-               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
+               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.KeyColumns, j.MergeDeleteMissing, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
         FROM etl.ExtractJob j
         JOIN etl.SqlServer ss ON ss.SqlServerId = j.SourceServerId
         JOIN etl.SqlServer ts ON ts.SqlServerId = j.TargetServerId
@@ -186,11 +186,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             j.ExtractJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExtractJob (Name, SourceServerId, SourceDatabase, SourceType, SourceSchema, SourceTable, ColumnList, FilterClause,
                     SourceQuery, UseNoLock, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
-                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, TriggerMode, IsActive, CreatedBy, ModifiedBy)
+                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, KeyColumns, MergeDeleteMissing, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExtractJobId
                 VALUES (@Name, @SourceServerId, @SourceDatabase, @SourceType, @SourceSchema, @SourceTable, @ColumnList, @FilterClause,
                     @SourceQuery, @UseNoLock, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
-                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
+                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @KeyColumns, @MergeDeleteMissing, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, j);
         }
         else
@@ -201,7 +201,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                     FilterClause = @FilterClause, SourceQuery = @SourceQuery, UseNoLock = @UseNoLock, LoadMode = @LoadMode,
                     WatermarkColumn = @WatermarkColumn, SchemaPolicy = @SchemaPolicy, PartitionDaily = @PartitionDaily, TargetServerId = @TargetServerId, TargetDatabase = @TargetDatabase,
                     TargetSchema = @TargetSchema, TargetTable = @TargetTable, CronExpression = @CronExpression, TimeZoneId = @TimeZoneId,
-                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, TriggerMode = @TriggerMode, IsActive = @IsActive,
+                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, KeyColumns = @KeyColumns, MergeDeleteMissing = @MergeDeleteMissing, TriggerMode = @TriggerMode, IsActive = @IsActive,
                     ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExtractJobId = @ExtractJobId;
                 """, j);
@@ -242,15 +242,16 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
     }
 
     /// <summary>Marks the LoadRun as succeeded and stores the new watermark (if any) in the same transaction.</summary>
-    public async Task CompleteLoadRunAsync(long loadRunId, int jobId, long rows, string? wmType, string? wmValue)
+    public async Task CompleteLoadRunAsync(long loadRunId, int jobId, long rows, string? wmType, string? wmValue, MergeCounts? merge = null)
     {
         await using var c = Conn();
         await c.OpenAsync();
         await using var tx = await c.BeginTransactionAsync();
         await c.ExecuteAsync("""
-            UPDATE etl.LoadRun SET Status = 'Succeeded', FinishedAtUtc = SYSUTCDATETIME(), RowsLoaded = @rows, WatermarkTo = @wmValue
+            UPDATE etl.LoadRun SET Status = 'Succeeded', FinishedAtUtc = SYSUTCDATETIME(), RowsLoaded = @rows, WatermarkTo = @wmValue,
+                   RowsInserted = @ins, RowsUpdated = @upd, RowsDeleted = @del
             WHERE LoadRunId = @loadRunId;
-            """, new { loadRunId, rows, wmValue }, tx);
+            """, new { loadRunId, rows, wmValue, ins = merge?.Inserted, upd = merge?.Updated, del = merge?.Deleted }, tx);
 
         if (wmValue is not null)
             await c.ExecuteAsync("""
@@ -554,6 +555,43 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             """, new { job.Kind, job.Id });
     }
 
+    // ================================================================ data protection
+
+    public async Task<IReadOnlyList<Privacy.MaskingRule>> GetMaskingRulesAsync()
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<Privacy.MaskingRule>("SELECT * FROM etl.MaskingRule ORDER BY Name")).AsList();
+    }
+
+    public async Task<int> SaveMaskingRuleAsync(Privacy.MaskingRule r, string user)
+    {
+        await using var c = Conn();
+        r.ModifiedBy = user;
+        bool isNew = r.MaskingRuleId == 0;
+        if (isNew)
+            r.MaskingRuleId = await c.ExecuteScalarAsync<int>("""
+                INSERT etl.MaskingRule (Name, ColumnPattern, ScopePattern, Method, KeepLast, AppliesTo, IsActive, ModifiedBy)
+                OUTPUT inserted.MaskingRuleId
+                VALUES (@Name, @ColumnPattern, @ScopePattern, @Method, @KeepLast, @AppliesTo, @IsActive, @ModifiedBy);
+                """, r);
+        else
+            await c.ExecuteAsync("""
+                UPDATE etl.MaskingRule SET Name = @Name, ColumnPattern = @ColumnPattern, ScopePattern = @ScopePattern, Method = @Method,
+                       KeepLast = @KeepLast, AppliesTo = @AppliesTo, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
+                WHERE MaskingRuleId = @MaskingRuleId;
+                """, r);
+        await AuditAsync(user, isNew ? "Create" : "Update", "MaskingRule", r.MaskingRuleId,
+            new { r.Name, r.ColumnPattern, r.ScopePattern, Method = r.Method.ToString(), r.KeepLast, AppliesTo = r.AppliesTo.ToString(), r.IsActive });
+        return r.MaskingRuleId;
+    }
+
+    public async Task DeleteMaskingRuleAsync(int id, string user)
+    {
+        await using var c = Conn();
+        await c.ExecuteAsync("DELETE etl.MaskingRule WHERE MaskingRuleId = @id", new { id });
+        await AuditAsync(user, "Delete", "MaskingRule", id, null);
+    }
+
     // ================================================================ monitoring
 
     public async Task<IReadOnlyList<JobStatusRow>> GetJobStatusAsync()
@@ -570,6 +608,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                 SELECT lr.LoadRunId AS RunId, 'Extract' AS Kind, lr.ExtractJobId AS JobId, ISNULL(j.Name, CONCAT('#', lr.ExtractJobId)) AS JobName,
                        lr.Status, lr.TriggeredBy, lr.StartedAtUtc, lr.FinishedAtUtc, lr.RowsLoaded AS [Rows],
                        CONCAT(lr.TargetDatabase, '.', lr.TargetSchema, '.', lr.TargetTable,
+                              CASE WHEN lr.RowsInserted IS NOT NULL THEN CONCAT('  merge: +', lr.RowsInserted, ' ~', lr.RowsUpdated, ' -', lr.RowsDeleted) END,
                               CASE WHEN lr.WatermarkTo IS NOT NULL THEN CONCAT('  wm: ', lr.WatermarkFrom, ' → ', lr.WatermarkTo) END) AS Detail,
                        lr.ErrorMessage
                 FROM etl.LoadRun lr LEFT JOIN etl.ExtractJob j ON j.ExtractJobId = lr.ExtractJobId

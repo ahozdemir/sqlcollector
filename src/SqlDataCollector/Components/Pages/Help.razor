@@ -131,6 +131,7 @@
                     <tr><td><b>Append</b></td><td>All selected rows are added. Older loads stay (until retention removes them).</td><td>Daily snapshots, history</td></tr>
                     <tr><td><b>Replace</b></td><td>All rows are loaded; after success the job's older loads are deleted.</td><td>Small reference tables</td></tr>
                     <tr><td><b>Incremental</b></td><td>Only rows with <code>watermark column &gt; last value</code> are read. The highest value read is stored after success.</td><td>Large tables with ModifiedAt / rowversion</td></tr>
+                    <tr><td><b>Merge</b></td><td>Upsert by <a href="/help#merge">key columns</a>: changed rows are updated, new keys inserted, optionally vanished keys deleted. The table holds one row per key (the current state).</td><td>Master data, orders with status changes, a current-state copy for exports</td></tr>
                 </tbody>
             </table>
             <h3>Replace: delete previous loads or rebuild and swap</h3>
@@ -143,6 +144,19 @@
                 <li>Rebuild only replaces tables created by the application (with <code>_LoadId</code>), only if no other job writes to the same table, and not with daily partitioning.
                     Grants on the table itself and indexes added by hand are lost on every run: grant permissions on the schema
                     (<code>GRANT SELECT ON SCHEMA::erp TO …</code>) or via <code>db_datareader</code>. A view created <code>WITH SCHEMABINDING</code> on the table blocks the swap.</li>
+            </ul>
+            <h3 id="merge">Merge (upsert)</h3>
+            <ul>
+                <li>Choose the <b>key columns</b> that identify one row (the primary key of a source table is suggested). Each run bulk-loads the source rows into a temporary table,
+                    checks them (no empty key, no key twice) and then applies them to the target in <b>one transaction</b>: rows whose values changed are updated, new keys are inserted.
+                    Unchanged rows are not touched, so <code>_LoadId</code> only moves for rows that really changed and incremental exports send exactly the changes.</li>
+                <li><b>Full read or watermark:</b> without a watermark column every run reads the whole source; with one (e.g. <code>ModifiedAt</code>, rowversion) only changed rows are read.</li>
+                <li><b>Delete rows whose key the source no longer returns</b> (optional, full read only): such rows are deleted from the target. A run that reads no rows at all never deletes,
+                    so a broken source cannot empty the table. Deleted rows do not appear in exports.</li>
+                <li>The target table gets a unique index <code>UX_&lt;schema&gt;_&lt;table&gt;_Key</code> on the key on the first run (re-created when the key changes). A table that already contains a key twice
+                    (e.g. from earlier Append loads) is refused with a clear message. Key columns of a <code>(max)</code> or xml type cannot be indexed: cast them in the query.</li>
+                <li>Only this job may write to the target table; daily partitioning and retention do not apply (the table is the current state of the source).</li>
+                <li>A failed run changes nothing (the transaction is rolled back) and needs no clean-up. The Run history shows <code>merge: +inserted ~updated -deleted</code>.</li>
             </ul>
             <h3>Watermark</h3>
             <ul>
@@ -365,6 +379,40 @@
             </ul>
         </section>
 
+        <section id="masking">
+            <h2>Data protection: masking and the export guard</h2>
+            <p>Admins define masking rules on <i>Administration → Data protection</i>. A rule matches columns by name (<code>*Email*;*Mail</code>, wildcards <code>*</code> and <code>?</code>,
+               case-insensitive) within a scope <code>Database.Schema.Table</code> (<code>*</code> = everywhere, e.g. <code>ERP.dbo.*</code>). A rule for a specific scope wins over an "everywhere" rule.</p>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Method</th><th>Result</th><th>Use for</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Hash</b></td><td>64 hex characters (HMAC-SHA256 with a secret key derived from <code>Secrets:Key</code>). The same value always gives the same hash, so masked columns can still be joined and counted; without the key it cannot be reversed, not even for 11-digit IDs.</td><td>National IDs, customer numbers used as keys</td></tr>
+                    <tr><td><b>Partial</b></td><td>Only the last N characters stay visible: <code>**********************1326</code>.</td><td>IBAN, card and phone numbers</td></tr>
+                    <tr><td><b>Email</b></td><td><code>a***@@corp.com</code> – the domain stays for statistics.</td><td>E-mail addresses</td></tr>
+                    <tr><td><b>Redact</b> / <b>Null</b></td><td><code>***</code> / no value.</td><td>Free text, notes, addresses</td></tr>
+                </tbody>
+            </table>
+            <ul>
+                <li><b>Applies to – exported files only:</b> the DWH keeps the real values; every CSV written for GCS contains the masked values. Masked columns are listed in the export manifest.</li>
+                <li><b>Applies to – already when collecting:</b> extract jobs write masked values into the DWH (matched against the source object and the target table), so nothing downstream ever sees the real value.
+                    Hash, Partial, Email and Redact turn non-text columns into text columns of new target tables; an existing Strict table must be re-created. The watermark column is never masked.
+                    Use Hash for Merge key columns (Partial could make two keys equal).</li>
+                <li>Masking applies from the next run; already exported files and already collected rows are not changed.</li>
+                <li>Free SQL in a custom-query export can rename a column (<code>SELECT Email AS X</code>) and so bypass a name-based rule: that is what the export guard is for.</li>
+            </ul>
+            <h3>Export guard</h3>
+            <p>The first 500 rows of every exported dataset are checked for e-mail addresses, Turkish national IDs (TCKN, with checksum), IBANs (mod-97 check), payment card numbers (Luhn check)
+               and Turkish phone numbers – only in columns no rule masks. A column is reported when at least half of its sampled values match.</p>
+            <ul>
+                <li><b>Warn</b> (default): the export runs; the run gets a <i>Data protection warning</i> naming the columns (Run history, Status).</li>
+                <li><b>Block</b>: the dataset is not uploaded and its local files are deleted; the run fails (AllTables exports continue with the other tables). Add a rule and run again.</li>
+                <li><b>Off</b>: no check.</li>
+            </ul>
+            <h3>Personal data scan</h3>
+            <p>Samples the latest 200 rows of every collected table of a target database and lists columns that look like personal data, with the rule that already masks them.
+               <i>Create rule</i> pre-fills a rule for exactly that table and column with a suggested method. The scan only reads; examples are shown partly hidden.</p>
+        </section>
+
         <section id="permission-check">
             <h2>Permission check</h2>
             <p><b>Check permissions</b> on the <i>Servers</i> page compares the service accounts' effective permissions with the minimum of
@@ -441,7 +489,7 @@
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "CSV format"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
-        ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
+        ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
     ];
 }

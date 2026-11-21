@@ -8,6 +8,8 @@ public sealed class RecordingLauncher : IDependentJobLauncher
 {
     private readonly List<(JobRef Job, string Name, string TriggeredBy)> _launched = [];
 
+    public bool CanLaunch => true;
+
     public void Launch(JobRef job, string jobName, string triggeredBy)
     {
         lock (_launched) _launched.Add((job, jobName, triggeredBy));

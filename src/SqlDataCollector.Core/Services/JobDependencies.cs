@@ -69,12 +69,16 @@ public static class DependencyRules
 /// <summary>Starts a dependency-triggered job. Production: Hangfire enqueue on the job's queue; tests: a recorder.</summary>
 public interface IDependentJobLauncher
 {
+    /// <summary>False in processes without a Hangfire client (e.g. the run-job CLI): nothing is evaluated or recorded there.</summary>
+    bool CanLaunch { get; }
     void Launch(JobRef job, string jobName, string triggeredBy);
 }
 
 /// <summary>Enqueues on sdc_extract / sdc_export. IBackgroundJobClient is resolved on use: hosts without Hangfire client never launch.</summary>
 public sealed class HangfireDependentJobLauncher(IServiceProvider services) : IDependentJobLauncher
 {
+    public bool CanLaunch => services.GetService<IBackgroundJobClient>() is not null;
+
     public void Launch(JobRef job, string jobName, string triggeredBy)
     {
         var client = services.GetRequiredService<IBackgroundJobClient>();
@@ -99,6 +103,9 @@ public sealed class DependencyService(
     /// <summary>Starts every ready dependent job once and returns them.</summary>
     public async Task<IReadOnlyList<JobRef>> EvaluateAsync(CancellationToken ct)
     {
+        // e.g. the run-job CLI runs jobs without Hangfire: leave the dependents to the sync job of a Worker (no trigger is recorded here)
+        if (!launcher.CanLaunch) { logger.LogDebug("Dependent jobs are not evaluated in this process (no Hangfire client)."); return []; }
+
         // wait briefly: an evaluation that is in progress may have read the state before our run's success was committed
         await using var l = await AppLock.TryAcquireAsync(factory.MetadataConnectionString, LockNames.Dependencies, 15000, ct);
         if (l is null) { logger.LogInformation("Dependency evaluation skipped: another process holds the lock."); return []; }

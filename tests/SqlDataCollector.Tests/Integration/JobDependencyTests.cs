@@ -95,6 +95,32 @@ public sealed class JobDependencyTests(CollectorFixture fx)
         finally { await CleanupAsync(a, e); }
     }
 
+    private sealed class NoHangfire : IDependentJobLauncher
+    {
+        public bool CanLaunch => false;
+        public void Launch(JobRef job, string jobName, string triggeredBy) => throw new InvalidOperationException("must not be called");
+    }
+
+    [Fact]
+    public async Task ProcessWithoutHangfire_LeavesDependentsToTheSyncJob_WithoutRecordingATrigger()
+    {
+        var a = await JobAsync("T_DepCli");
+        var d = await JobAsync("T_DepCliAfter", afterJobs: true);
+        try
+        {
+            await Dependencies.SaveAsync(R(d), d.TriggerMode, [R(a)], "tests");
+            var cli = new DependencyService(fx.Repo, fx.Get<SqlDataCollector.Infrastructure.SqlConnectionFactory>(), new NoHangfire(),
+                fx.Get<Microsoft.Extensions.Logging.ILogger<DependencyService>>());
+            await fx.RunExtractAsync(a);   // the fixture's own hook already started d; reset and check the CLI path alone
+            await fx.ExecAsync("DataCollectorMeta", "DELETE etl.JobTrigger WHERE JobKind = 'Extract' AND JobId = @id", new { id = d.ExtractJobId });
+
+            Assert.Empty(await cli.EvaluateAsync(CancellationToken.None));
+            Assert.Equal(0, await fx.ScalarAsync<int>("DataCollectorMeta", "SELECT COUNT(*) FROM etl.JobTrigger WHERE JobKind = 'Extract' AND JobId = @id", new { id = d.ExtractJobId }));
+            Assert.Equal(R(d), Assert.Single(await Dependencies.EvaluateAsync(CancellationToken.None)));   // the Worker's sync still starts it
+        }
+        finally { await CleanupAsync(a, d); }
+    }
+
     [Fact]
     public async Task Loops_AreRefused_AndDeletingAJobRemovesItsDependencies()
     {

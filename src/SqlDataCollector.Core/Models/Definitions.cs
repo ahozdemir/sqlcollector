@@ -2,7 +2,7 @@ namespace SqlDataCollector.Models;
 
 public enum SourceType : byte { Table = 1, Query = 2 }
 
-public enum LoadMode : byte { Append = 1, Replace = 2, Incremental = 3 }
+public enum LoadMode : byte { Append = 1, Replace = 2, Incremental = 3, Merge = 4 }
 
 public enum ExportMode : byte { Full = 1, Incremental = 2, Query = 3, AllTables = 4 }
 
@@ -60,6 +60,8 @@ public sealed class ExtractJobDef
     public int CommandTimeoutSec { get; set; } = 3600;
     public int BatchSize { get; set; } = 10000;
     public bool ReplaceRebuild { get; set; }   // Replace: rebuild the table and swap it in
+    public string? KeyColumns { get; set; }    // Merge: key column names (comma separated); nullable in DB: no default
+    public bool MergeDeleteMissing { get; set; }   // Merge: delete rows missing from a full read
     public JobTriggerMode TriggerMode { get; set; } = JobTriggerMode.Schedule;
     public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
     public bool IsActive { get; set; } = true;
@@ -225,3 +227,21 @@ public sealed class DependencyStateRow
     public JobRef Job => new(JobKind, JobId);
     public JobRef Upstream => new(UpstreamKind, UpstreamId);
 }
+
+public static class ExtractJobRules
+{
+    /// <summary>Reads only rows above the stored watermark: Incremental always, Merge when a watermark column is set.</summary>
+    public static bool UsesWatermark(this ExtractJobDef j) =>
+        j.LoadMode == LoadMode.Incremental || (j.LoadMode == LoadMode.Merge && !string.IsNullOrWhiteSpace(j.WatermarkColumn));
+
+    /// <summary>The table holds only the current state (Replace, Merge): retention by age does not apply.</summary>
+    public static bool KeepsCurrentStateOnly(this LoadMode mode) => mode is LoadMode.Replace or LoadMode.Merge;
+
+    /// <summary>Key column names of a Merge job, in order.</summary>
+    public static IReadOnlyList<string> KeyColumnList(this ExtractJobDef j) =>
+        (j.KeyColumns ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(k => k.Trim('[', ']')).Where(k => k.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+}
+
+/// <summary>Rows a merge inserted, updated (changed values only) and deleted.</summary>
+public sealed record MergeCounts(long Inserted, long Updated, long Deleted);

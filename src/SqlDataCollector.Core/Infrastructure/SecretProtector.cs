@@ -48,6 +48,10 @@ public sealed class SecretProtector(IConfiguration configuration)
         return Encoding.UTF8.GetString(plain);
     }
 
+    /// <summary>A separate 32-byte key for one purpose (e.g. masking hashes), derived from Secrets:Key; null when not configured.</summary>
+    public byte[]? DeriveKey(string purpose) =>
+        TryGetKey(out var k) ? HMACSHA256.HashData(k, Encoding.UTF8.GetBytes("SqlHarbor:" + purpose)) : null;
+
     private byte[] GetKey() => TryGetKey(out var k) ? k
         : throw new InvalidOperationException($"{ConfigKey} is not configured (base64, 32 bytes). The installer writes it; all processes need the same value.");
 

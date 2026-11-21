@@ -406,6 +406,79 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
         return (true, k);
     }
 
+    // ------------------------------------------------------------ Merge: unique key index
+
+    public static string MergeKeyIndexName(string schema, string table) => "UX_" + Safe(schema + "_" + table) + "_Key";
+
+    /// <summary>
+    /// Merge mode: makes sure [schema].[table] has the unique index UX_..._Key on exactly the key columns
+    /// (created on the first run, re-created when the key changes). Fails clearly on duplicate keys,
+    /// key columns that cannot be indexed and daily partitioned tables.
+    /// </summary>
+    public async Task EnsureMergeKeyAsync(SqlConnection conn, string schema, string table, IReadOnlyList<string> keyColumns, CancellationToken ct)
+    {
+        var full = SqlIdent.Quote(schema, table);
+        var ix = MergeKeyIndexName(schema, table);
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
+        await LockDdlAsync(conn, tx, schema, table, ct);
+
+        if (await IsPartitionedAsync(conn, tx, full, ct))
+            throw new InvalidOperationException($"Merge cannot write to the daily partitioned table {full}; choose another target table.");
+
+        var columns = await GetColumnsAsync(conn, tx, full, ct);
+        foreach (var k in keyColumns)
+        {
+            if (!columns.TryGetValue(k, out var col))
+                throw new InvalidOperationException($"Merge key column '{k}' does not exist in {full}.");
+            if (col.MaxLength == -1 || col.Type.ToLowerInvariant() is "xml" or "text" or "ntext" or "image")
+                throw new InvalidOperationException(
+                    $"Merge key column '{k}' is {col.Declaration} and cannot be part of an index. Cast it in the query to a sized type, e.g. CAST({k} AS nvarchar(200)) AS {k}.");
+        }
+
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                SELECT c.name FROM sys.indexes i
+                JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.key_ordinal > 0
+                JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE i.object_id = OBJECT_ID(@t, N'U') AND i.name = @ix ORDER BY ic.key_ordinal;
+                """;
+            cmd.Parameters.AddWithValue("@t", full);
+            cmd.Parameters.AddWithValue("@ix", ix);
+            var current = new List<string>();
+            await using (var r = await cmd.ExecuteReaderAsync(ct))
+                while (await r.ReadAsync(ct)) current.Add(r.GetString(0));
+            if (current.SequenceEqual(keyColumns.Select(k => columns[k].Name), StringComparer.OrdinalIgnoreCase))
+            {
+                await tx.CommitAsync(ct);
+                return;
+            }
+            if (current.Count > 0) await ExecAsync(conn, tx, $"DROP INDEX {SqlIdent.Quote(ix)} ON {full};", ct);
+        }
+
+        var compression = options.Value.TargetTableCompression?.ToUpperInvariant() switch
+        {
+            "ROW" => " WITH (DATA_COMPRESSION = ROW)",
+            "PAGE" => " WITH (DATA_COMPRESSION = PAGE)",
+            _ => ""
+        };
+        try
+        {
+            await ExecAsync(conn, tx,
+                $"CREATE UNIQUE NONCLUSTERED INDEX {SqlIdent.Quote(ix)} ON {full} ({string.Join(", ", keyColumns.Select(k => SqlIdent.Quote(columns[k].Name)))}){compression};", ct);
+        }
+        catch (SqlException ex) when (ex.Number is 1505 or 1911 or 1919 or 1946)
+        {
+            throw new InvalidOperationException(ex.Number == 1505
+                ? $"Merge: {full} already contains rows with the same key ({string.Join(", ", keyColumns)}), e.g. from earlier Append loads. " +
+                  "Remove the duplicates or merge into a new table."
+                : $"Merge: the unique index on ({string.Join(", ", keyColumns)}) cannot be created on {full}: {ex.Message}", ex);
+        }
+        await tx.CommitAsync(ct);
+        logger.LogInformation("Merge key index {Index} created on {Table} ({Keys}).", ix, full, string.Join(", ", keyColumns));
+    }
+
     // ------------------------------------------------------------ Replace: rebuild and swap
 
     public const string RebuildSuffix = "__sdc_new";

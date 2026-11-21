@@ -1,0 +1,294 @@
+@page "/admin/privacy"
+@attribute [Authorize(Policy = AppRoles.Admin)]
+@using SqlDataCollector.Privacy
+@inject MetadataRepository Repo
+@inject MaskingService Masking
+@inject PrivacyScanner Scanner
+@inject SecretProtector Secrets
+@inject AccessService Access
+
+<PageTitle>Data protection</PageTitle>
+
+<h1 class="h4 mb-2">Data protection <HelpLink Topic="masking" Title="Masking and the export guard" /></h1>
+<p class="small text-muted">Masking rules hide personal data in exported files or already when collecting. The export guard checks the first rows of every export
+    for personal data (e-mail, national ID, IBAN, card and phone numbers) in columns that no rule masks.</p>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2" style="white-space: pre-line">@error</div> }
+@if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2">@info</div> }
+@if (!Secrets.IsConfigured) { <div class="alert alert-warning py-2 small">Secrets:Key is not configured: <b>Hash</b> masking cannot run (the key makes hashes irreversible). The installer writes it.</div> }
+
+<div class="card mb-3"><div class="card-body">
+    <div class="section-title mb-2">Export guard</div>
+    <div class="d-flex flex-wrap align-items-center gap-3">
+        @foreach (var m in Enum.GetValues<PrivacyGuardMode>())
+        {
+            <div class="form-check mb-0">
+                <input class="form-check-input" type="radio" name="guard" id="guard-@m" checked="@(guard == m)" @onchange="() => guard = m" />
+                <label class="form-check-label small" for="guard-@m"><b>@m</b> – @GuardText(m)</label>
+            </div>
+        }
+        <button class="btn btn-sm btn-primary ms-auto" @onclick="SaveGuardAsync">Save</button>
+    </div>
+</div></div>
+
+<div class="d-flex align-items-center mb-1">
+    <div class="section-title me-auto">Masking rules</div>
+    <button class="btn btn-sm btn-primary" @onclick="() => Edit(new MaskingRule())">+ New rule</button>
+</div>
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light"><tr><th>Name</th><th>Columns</th><th>Scope</th><th>Method</th><th>Applies to</th><th>State</th><th>Example</th><th></th></tr></thead>
+    <tbody>
+        @if (rules.Count == 0) { <tr><td colspan="8" class="text-muted small">No rule yet. Run a scan below to find columns with personal data.</td></tr> }
+        @foreach (var r in rules)
+        {
+            <tr class="@(r.IsActive ? "" : "text-muted")">
+                <td>@r.Name</td>
+                <td class="mono small">@r.ColumnPattern</td>
+                <td class="mono small">@r.ScopePattern</td>
+                <td>@r.Describe()</td>
+                <td class="small">@(r.AppliesTo == MaskTarget.Exports ? "Exported files" : "Collection + exports")</td>
+                <td>@(r.IsActive ? "Active" : "Inactive")</td>
+                <td class="mono small">@Example(r)</td>
+                <td><button class="btn btn-sm btn-outline-primary" @onclick="() => Edit(r)">Edit</button></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (editing is not null)
+{
+    <div class="card mb-3 border-primary"><div class="card-body">
+        <div class="section-title mb-2">@(editing.MaskingRuleId == 0 ? "New rule" : $"Edit rule: {editing.Name}")</div>
+        <div class="row g-2">
+            <div class="col-md-3">
+                <label class="form-label small">Name</label>
+                <input class="form-control form-control-sm" @bind="editing.Name" />
+            </div>
+            <div class="col-md-5">
+                <label class="form-label small">Column names (; separated, * and ? wildcards)</label>
+                <input class="form-control form-control-sm mono" @bind="editing.ColumnPattern" placeholder="*Email*;*Mail" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small">Scope: Database.Schema.Table (* = everywhere)</label>
+                <input class="form-control form-control-sm mono" @bind="editing.ScopePattern" placeholder="ERP.dbo.* or SdcDwh.erp.Customers" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small">Method</label>
+                <select class="form-select form-select-sm" @bind="editing.Method">
+                    <option value="@MaskMethod.Hash">Hash – irreversible, same input = same output (joinable)</option>
+                    <option value="@MaskMethod.Partial">Partial – keep the last characters</option>
+                    <option value="@MaskMethod.Email">Email – a***@@domain</option>
+                    <option value="@MaskMethod.Redact">Redact – ***</option>
+                    <option value="@MaskMethod.Null">Null – remove the value</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">Visible characters</label>
+                <input type="number" min="0" max="20" class="form-control form-control-sm" @bind="editing.KeepLast" disabled="@(editing.Method != MaskMethod.Partial)" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small">Applies to</label>
+                <select class="form-select form-select-sm" @bind="editing.AppliesTo">
+                    <option value="@MaskTarget.Exports">Exported files only (the DWH keeps the real values)</option>
+                    <option value="@MaskTarget.ExtractAndExports">Already when collecting (the DWH holds masked values)</option>
+                </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ruleActive" @bind="editing.IsActive" /><label class="form-check-label small" for="ruleActive">Active</label></div>
+            </div>
+            <div class="col-12 small text-muted">
+                Example: <span class="mono">@Example(editing)</span>.
+                @if (editing.AppliesTo == MaskTarget.ExtractAndExports)
+                {
+                    <span>Masking while collecting changes non-text columns to text in new target tables; an existing Strict table must be re-created. The watermark column is never masked.</span>
+                }
+            </div>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-primary" @onclick="SaveRuleAsync">Save</button>
+            <button class="btn btn-sm btn-link" @onclick="() => editing = null">Cancel</button>
+            @if (editing.MaskingRuleId != 0)
+            {
+                <span class="ms-auto"></span>
+                <button class="btn btn-sm btn-outline-danger" @onclick="DeleteRuleAsync">Delete</button>
+            }
+        </div>
+    </div></div>
+}
+
+<div class="card mb-3"><div class="card-body">
+    <div class="section-title mb-2">Scan collected tables for personal data</div>
+    <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label small">Target server</label>
+            <select class="form-select form-select-sm" @bind="scanServerId" @bind:after="ScanServerChangedAsync">
+                <option value="0">Choose…</option>
+                @foreach (var s in targetServers) { <option value="@s.SqlServerId">@s.Name</option> }
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label small">Database</label>
+            <select class="form-select form-select-sm" @bind="scanDatabase">
+                <option value="">Choose…</option>
+                @foreach (var d in scanDatabases) { <option value="@d">@d</option> }
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-sm btn-outline-primary" disabled="@(scanServerId == 0 || string.IsNullOrEmpty(scanDatabase) || scanning)" @onclick="ScanAsync">
+                @(scanning ? "Scanning…" : "Scan")
+            </button>
+        </div>
+        <div class="col-md-4 small text-muted">Samples the latest 200 rows of every collected table. Read-only.</div>
+    </div>
+    @if (findings is not null)
+    {
+        <table class="table table-sm bg-white mt-3 mb-0">
+            <thead class="table-light"><tr><th>Table</th><th>Column</th><th>Looks like</th><th class="text-end">Sample match</th><th>Example</th><th>Masked by</th><th></th></tr></thead>
+            <tbody>
+                @if (findings.Count == 0) { <tr><td colspan="7" class="text-muted small">No personal data found in the sampled rows.</td></tr> }
+                @foreach (var f in findings)
+                {
+                    <tr>
+                        <td class="mono small">@f.Schema.@f.Table</td>
+                        <td class="mono small">@f.Column</td>
+                        <td>@PiiDetector.Describe(f.Kind)</td>
+                        <td class="text-end">@f.Ratio.ToString("P0", Ui.Culture)</td>
+                        <td class="mono small">@f.Example</td>
+                        <td class="small">@if (f.CoveredBy is null) { <span class="text-danger">not masked</span> } else { @f.CoveredBy }</td>
+                        <td>@if (f.CoveredBy is null) { <button class="btn btn-sm btn-outline-primary" @onclick="() => SuggestRule(f)">Create rule</button> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div></div>
+
+@code {
+    private List<MaskingRule> rules = [];
+    private MaskingRule? editing;
+    private PrivacyGuardMode guard;
+    private string? error, info;
+
+    private List<SqlServerDef> targetServers = [];
+    private IReadOnlyList<string> scanDatabases = [];
+    private int scanServerId;
+    private string scanDatabase = "";
+    private bool scanning;
+    private IReadOnlyList<PiiFinding>? findings;
+
+    [Inject] private CatalogService Catalog { get; set; } = null!;
+
+    private static readonly byte[] DemoKey = new byte[32];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            rules = (await Repo.GetMaskingRulesAsync()).ToList();
+            guard = await Masking.GetGuardAsync();
+            targetServers = (await Repo.GetServersAsync()).Where(s => s.IsTarget && s.IsActive).ToList();
+            if (targetServers.Count == 1) { scanServerId = targetServers[0].SqlServerId; await ScanServerChangedAsync(); }
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private static string GuardText(PrivacyGuardMode m) => m switch
+    {
+        PrivacyGuardMode.Off => "no check",
+        PrivacyGuardMode.Warn => "export, but record a warning on the run",
+        _ => "stop the export before anything is uploaded"
+    };
+
+    /// <summary>Preview of a rule on a sample value (hash shown with a demo key).</summary>
+    private static string Example(MaskingRule r)
+    {
+        var sample = r.Method == MaskMethod.Email ? "ayse.yilmaz@corp.com" : "TR330006100519786457841326";
+        try { return $"{sample} → {Masker.Apply(r.Method, r.KeepLast, sample, DemoKey) ?? "NULL"}"; }
+        catch (Exception ex) { return ex.Message; }
+    }
+
+    private void Edit(MaskingRule r)
+    {
+        error = info = null;
+        editing = new MaskingRule
+        {
+            MaskingRuleId = r.MaskingRuleId, Name = r.Name, ColumnPattern = r.ColumnPattern, ScopePattern = r.ScopePattern,
+            Method = r.Method, KeepLast = r.KeepLast, AppliesTo = r.AppliesTo, IsActive = r.MaskingRuleId == 0 || r.IsActive
+        };
+    }
+
+    private void SuggestRule(PiiFinding f)
+    {
+        var (method, keep) = PiiDetector.Suggest(f.Kind);
+        Edit(new MaskingRule
+        {
+            Name = $"{f.Table}.{f.Column}", ColumnPattern = f.Column, ScopePattern = f.ObjectName(scanDatabase),
+            Method = method, KeepLast = keep == 0 ? 4 : keep, AppliesTo = MaskTarget.Exports
+        });
+    }
+
+    private async Task SaveRuleAsync()
+    {
+        error = info = null;
+        try
+        {
+            var r = editing!;
+            r.Name = r.Name.Trim(); r.ColumnPattern = r.ColumnPattern.Trim(); r.ScopePattern = string.IsNullOrWhiteSpace(r.ScopePattern) ? "*" : r.ScopePattern.Trim();
+            var errs = new List<string>();
+            if (r.Name.Length == 0) errs.Add("Name is required.");
+            if (r.ColumnPattern.Length == 0) errs.Add("Enter at least one column name pattern.");
+            if (r.ColumnPattern.Trim(';', ' ', '*').Length == 0) errs.Add("A column pattern of only * would mask every column; name the columns.");
+            if (r.KeepLast is < 0 or > 20) errs.Add("Visible characters must be between 0 and 20.");
+            if (r.Method == MaskMethod.Hash && !Secrets.IsConfigured) errs.Add("Hash needs Secrets:Key in the configuration of every process.");
+            if (rules.Any(x => x.MaskingRuleId != r.MaskingRuleId && x.Name.Equals(r.Name, StringComparison.OrdinalIgnoreCase))) errs.Add("A rule with this name exists.");
+            if (errs.Count > 0) throw new InvalidOperationException(string.Join("\n", errs));
+
+            await Repo.SaveMaskingRuleAsync(r, await Access.UserNameAsync());
+            rules = (await Repo.GetMaskingRulesAsync()).ToList();
+            info = $"Rule '{r.Name}' saved. It applies from the next run.";
+            editing = null;
+            if (findings is not null) await ScanAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteRuleAsync()
+    {
+        error = info = null;
+        try
+        {
+            await Repo.DeleteMaskingRuleAsync(editing!.MaskingRuleId, await Access.UserNameAsync());
+            rules = (await Repo.GetMaskingRulesAsync()).ToList();
+            info = $"Rule '{editing.Name}' deleted.";
+            editing = null;
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task SaveGuardAsync()
+    {
+        error = info = null;
+        try
+        {
+            await Masking.SaveGuardAsync(guard, await Access.UserNameAsync());
+            info = $"Export guard set to {guard}.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task ScanServerChangedAsync()
+    {
+        scanDatabases = []; scanDatabase = ""; findings = null;
+        if (scanServerId == 0) return;
+        try { scanDatabases = await Catalog.DatabasesAsync(scanServerId); }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task ScanAsync()
+    {
+        error = null; scanning = true;
+        try { findings = await Scanner.ScanAsync(scanServerId, scanDatabase); }
+        catch (Exception ex) { error = ex.Message; }
+        finally { scanning = false; }
+    }
+}

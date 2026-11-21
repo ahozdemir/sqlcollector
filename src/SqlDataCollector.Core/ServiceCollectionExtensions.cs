@@ -27,6 +27,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SqlConnectionFactory>();
         services.AddSingleton<MetadataRepository>();
         services.AddSingleton<TargetTableManager>();
+        services.AddSingleton<MergeLoader>();
+        services.AddSingleton<Privacy.MaskingService>();
+        services.AddSingleton<Privacy.PrivacyScanner>();
         services.AddSingleton<SecretProtector>();
         services.AddSingleton<GcsCredentialStore>();
         services.AddSingleton<GcsUploader>();

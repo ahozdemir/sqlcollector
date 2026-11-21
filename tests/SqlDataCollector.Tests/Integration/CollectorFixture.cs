@@ -82,6 +82,7 @@ public sealed partial class CollectorFixture : IAsyncLifetime
             ["Gcs:Endpoint"] = GcsBaseUrl,
             ["Gcs:Anonymous"] = "true",
             ["Gcs:MaxRetries"] = "2",
+            ["Secrets:Key"] = Convert.ToBase64String(new byte[32]),   // test-only key (hash masking, secret settings)
         }).Build();
 
         var services = new ServiceCollection();

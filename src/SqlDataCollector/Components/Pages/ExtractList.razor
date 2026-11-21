@@ -22,10 +22,10 @@
                 <td><a href="/extract/@j.ExtractJobId">@j.Name</a> @if (!j.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
                 <td class="mono">@j.SourceServerName / @j.SourceDatabase / @(j.SourceType == SourceType.Table ? $"{j.SourceSchema}.{j.SourceTable}" : "(query)")</td>
                 <td class="mono">@j.TargetServerName / @j.TargetDatabase / @j.TargetSchema.@j.TargetTable</td>
-                <td>@j.LoadMode @if (j.LoadMode == LoadMode.Incremental) { <span class="text-muted small">(@j.WatermarkColumn)</span> }</td>
+                <td>@j.LoadMode @if (j.LoadMode == LoadMode.Incremental) { <span class="text-muted small">(@j.WatermarkColumn)</span> } else if (j.LoadMode == LoadMode.Merge) { <span class="text-muted small">(key: @j.KeyColumns@(j.WatermarkColumn is null ? "" : ", wm: " + j.WatermarkColumn))</span> }</td>
                 <td>@j.SchemaPolicy @if (j.PartitionDaily) { <span class="badge bg-info-subtle text-info-emphasis">daily part.</span> }</td>
                 <td><ScheduleCell Kind="@JobRef.Extract" JobId="j.ExtractJobId" Cron="@j.CronExpression" AfterJobs="@(j.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
-                <td>@(j.LoadMode == LoadMode.Replace ? "latest load" : j.RetentionDays is null ? "∞" : $"{j.RetentionDays} days")</td>
+                <td>@(j.LoadMode == LoadMode.Replace ? "latest load" : j.LoadMode == LoadMode.Merge ? "current state" : j.RetentionDays is null ? "∞" : $"{j.RetentionDays} days")</td>
                 <td class="small">@j.ModifiedBy<br /><span class="text-muted">@Ui.Local(j.ModifiedAtUtc)</span></td>
             </tr>
         }

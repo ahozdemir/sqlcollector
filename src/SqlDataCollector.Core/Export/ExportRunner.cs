@@ -57,11 +57,13 @@ public sealed class ExportRunner(
     MetadataRepository repo,
     SqlConnectionFactory factory,
     GcsUploader uploader,
+    Privacy.MaskingService masking,
     DependencyService dependencies,
     IOptions<CollectorOptions> options,
     ILogger<ExportRunner> logger)
 {
-    private sealed record Dataset(List<CsvPart> Parts, IReadOnlyList<string> Columns, double WriteSec, double UploadSec)
+    private sealed record Dataset(List<CsvPart> Parts, IReadOnlyList<string> Columns, double WriteSec, double UploadSec,
+        IReadOnlyList<string> Masked, IReadOnlyList<string> PrivacyWarnings)
     {
         public long Rows => Parts.Sum(p => p.Rows);
         public long Bytes => Parts.Sum(p => p.Bytes);
@@ -144,12 +146,14 @@ public sealed class ExportRunner(
                 await UploadManifestAsync(job, runId, local, nowUtc, new
                 {
                     loadIdFrom = lo, loadIdTo = hi, totalRows = data.Rows, columns = data.Columns,
+                    masked = data.Masked,
                     files = data.Parts.Select(p => new { objectName = p.ObjectName, rows = p.Rows, bytes = p.Bytes })
                 }, ObjectNameTemplate.CommonPrefix(job.ObjectNameTemplate, job.Name, job.SourceDatabase, local), ct);
 
             await repo.CompleteExportRunAsync(runId, exportJobId, "Succeeded", data.Rows, data.Parts.Count, data.Bytes, lo, hi,
                 string.Join(Environment.NewLine, data.Parts.Select(p => $"gs://{job.Bucket}/{p.ObjectName}")),
-                job.ExportMode == ExportMode.Incremental ? hi : null);
+                job.ExportMode == ExportMode.Incremental ? hi : null,
+                error: data.PrivacyWarnings.Count > 0 ? string.Join(Environment.NewLine, data.PrivacyWarnings) : null);
 
             logger.LogInformation("Export {Name}: {Rows:N0} rows, {Files} file(s), {Bytes:N0} bytes, {Sec:N1} s (read+CSV{Gz} {Write:N2} s, upload {Upload:N2} s)",
                 job.Name, data.Rows, data.Parts.Count, data.Bytes, sw.Elapsed.TotalSeconds, job.Gzip ? "+gzip" : "", data.WriteSec, data.UploadSec);
@@ -187,6 +191,7 @@ public sealed class ExportRunner(
         var summary = new List<object>();
         var objectNames = new List<string>();
         var errors = new StringBuilder();
+        var privacyWarnings = new List<string>();
         long totalRows = 0, totalBytes = 0;
         int totalFiles = 0, ok = 0, failed = 0, skipped = 0;
 
@@ -221,10 +226,12 @@ public sealed class ExportRunner(
 
                 ok++;
                 totalRows += data.Rows; totalBytes += data.Bytes; totalFiles += data.Parts.Count;
+                privacyWarnings.AddRange(data.PrivacyWarnings);
                 objectNames.AddRange(data.Parts.Select(p => $"gs://{job.Bucket}/{p.ObjectName}"));
                 summary.Add(new
                 {
                     table = t.Key, status = "Succeeded", rows = data.Rows, loadIdFrom = lo, loadIdTo = hi, columns = data.Columns,
+                    masked = data.Masked,
                     files = data.Parts.Select(p => new { objectName = p.ObjectName, rows = p.Rows, bytes = p.Bytes })
                 });
                 logger.LogInformation("Export {Name} / {Table}: {Rows:N0} rows, {Files} file(s) (LoadId {Lo}..{Hi}], read+CSV {Write:N2} s, upload {Upload:N2} s",
@@ -254,7 +261,8 @@ public sealed class ExportRunner(
         var head = $"{tables.Count} table(s): {ok} exported, {skipped} skipped, {failed} failed";
         await repo.CompleteExportRunAsync(runId, job.ExportJobId, status, totalRows, totalFiles, totalBytes, null, null,
             head + Environment.NewLine + string.Join(Environment.NewLine, objectNames),
-            advanceStateTo: null, error: failed > 0 ? errors.ToString() : null);
+            advanceStateTo: null,
+            error: failed > 0 || privacyWarnings.Count > 0 ? (errors + string.Join(Environment.NewLine, privacyWarnings)).Trim() : null);
 
         logger.LogInformation("Export {Name}: {Head}; {Rows:N0} rows, {Files} file(s), {Bytes:N0} bytes, {Sec:N1} s",
             job.Name, head, totalRows, totalFiles, totalBytes, sw.Elapsed.TotalSeconds);
@@ -289,10 +297,19 @@ public sealed class ExportRunner(
         var format = new CsvFormat(job.Delimiter, job.QuoteMode, job.NullValue,
             job.LineEnding == "CRLF" ? "\r\n" : "\n", job.Utf8Bom, job.Gzip);
 
+        // data protection: masking rules for exported files, and the guard for likely personal data nobody masks
+        var policy = await masking.GetPolicyAsync();
+        var objectName = table is null ? $"{job.SourceDatabase}.(query)" : $"{job.SourceDatabase}.{schema}.{table}";
+        var names = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToList();
+        var masks = policy.ForExport(objectName, names);
+        var sampler = policy.Guard == Privacy.PrivacyGuardMode.Off ? null
+            : new Privacy.PiiSampler(names, masks.Select((m, i) => m is not null || SqlIdent.IsTechnical(names[i])).ToList(),
+                Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetFieldType(i) == typeof(string)).ToList());
+
         List<CsvPart> parts;
         IReadOnlyList<string> columns;
         var swWrite = Stopwatch.StartNew();
-        using (var writer = new CsvPartWriter(dir, baseName, format, job.MaxRowsPerFile, reader))
+        using (var writer = new CsvPartWriter(dir, baseName, format, job.MaxRowsPerFile, reader, masks, sampler))
         {
             while (await reader.ReadAsync(ct)) writer.WriteRow(reader);
             if (writer.TotalRows == 0 && job.UploadWhenEmpty) writer.EnsureAtLeastOnePart();
@@ -301,6 +318,22 @@ public sealed class ExportRunner(
             columns = writer.Header;
         }
         var writeSec = swWrite.Elapsed.TotalSeconds;
+
+        var warnings = new List<string>();
+        if (sampler?.Findings() is { Count: > 0 } findings)
+        {
+            var list = string.Join(", ", findings.Select(f => $"{f.Column} ({Privacy.PiiDetector.Describe(f.Kind)}, {f.Ratio:P0} of sampled values)"));
+            if (policy.Guard == Privacy.PrivacyGuardMode.Block)
+            {
+                // nothing was uploaded yet: remove the local files too
+                foreach (var p in parts) try { File.Delete(p.LocalPath); } catch (IOException) { }
+                throw new InvalidOperationException(
+                    $"Export blocked by the data protection guard: likely personal data without a masking rule in {objectName}: {list}. " +
+                    "Add a masking rule (Admin → Data protection) or change the guard mode.");
+            }
+            warnings.Add($"Data protection warning – likely personal data without a masking rule in {objectName}: {list}.");
+            logger.LogWarning("Export {Name}: likely personal data without a masking rule in {Object}: {List}", job.Name, objectName, list);
+        }
 
         var swUpload = Stopwatch.StartNew();
         foreach (var part in parts)
@@ -318,7 +351,7 @@ public sealed class ExportRunner(
             foreach (var part in parts.Where(p => !p.LocalPath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)))
                 await GzipInPlaceAsync(part.LocalPath, ct);
 
-        return new Dataset(parts, columns, writeSec, uploadSec);
+        return new Dataset(parts, columns, writeSec, uploadSec, masks.Where(m => m is not null).Select(m => m!.Describe()).ToList(), warnings);
     }
 
     /// <summary>Compresses file.csv to file.csv.gz (via a temp file) and deletes the original.</summary>

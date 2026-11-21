@@ -66,6 +66,10 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - Load modes: **Append** (snapshot history) · **Replace** (keep only the latest successful load) ·
   **Incremental** (watermark: datetime/datetime2/date/int/bigint/decimal/rowversion; the parameter uses the column's real
   SQL type, so no datetime `.003` duplicates and no lost index seeks)
+- **Merge** (upsert by key columns): source rows are staged and checked (no NULL or duplicate keys), then applied in one
+  transaction – changed rows updated (NULL-safe comparison, unchanged rows untouched so incremental exports send only
+  changes), new keys inserted, optionally keys missing from a full read deleted; full read or watermark; unique key index
+  on the target; the run history shows `+inserted ~updated -deleted`
 - **Replace with rebuild** (optional): load a fresh `<table>__sdc_new` from the current source schema (minimally logged),
   then swap it in atomically – no slow DELETE of the previous load, source column changes absorbed, the old table stays
   if the load fails. Only for collector tables written by this job alone; grant permissions on the schema.
@@ -98,6 +102,17 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
   every selected extract/export has succeeded again (export *Skipped* counts), e.g. the nightly export right after all
   extracts. Each upstream success is used once; loops are refused; checked after every run and by the sync job
   (`etl.JobDependency`, `etl.JobTrigger`). Lists and Status show such jobs as *after A, B*.
+
+**Data protection** (Admin → *Data protection*)
+- **Masking rules** by column name pattern (`*Email*;*Mail`) and optional scope (`ERP.dbo.*`): **Hash** (HMAC-SHA256 with a
+  key derived from `Secrets:Key` – deterministic, joinable, not reversible even for 11-digit IDs), **Partial** (last N visible),
+  **Email** (`a***@domain`), **Redact**, **Null**; applied to **exported files only** or **already when collecting** (the DWH
+  holds masked values). Masked columns are listed in the export manifest; rule changes are audited.
+- **Export guard** (Off / **Warn** / Block): the first 500 rows of every export are checked for e-mail addresses, Turkish
+  national IDs (checksum), IBANs (mod 97), card numbers (Luhn) and phone numbers in columns no rule masks – *Warn* records
+  a warning on the run, *Block* stops before anything is uploaded and deletes the local files.
+- **Personal data scan**: samples the latest rows of every collected table and lists likely personal data columns with the
+  rule that covers them, or a one-click *Create rule*.
 
 **Administration**
 - Roles **Admin / Editor / Viewer** for AD users or groups; server/database permissions (who may use which server/database as source or target)

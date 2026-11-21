@@ -73,6 +73,8 @@ GO
    LoadMode   : 1 = Append      (each run appends rows; snapshot history)
                 2 = Replace     (after a successful load, older loads of this job are deleted)
                 3 = Incremental (WatermarkColumn > last watermark)
+                4 = Merge       (upsert by KeyColumns: changed rows updated, new rows inserted, optionally rows
+                                 missing from a full read deleted; optional WatermarkColumn reads only changed rows)
    Incremental + Query -> use @WatermarkFrom in the query:
         WHERE (@WatermarkFrom IS NULL OR t.ModifiedAt > @WatermarkFrom)
    SchemaPolicy  : 1 = Strict (create if missing; if it exists it must match exactly, otherwise fail)
@@ -93,7 +95,7 @@ CREATE TABLE etl.ExtractJob
     FilterClause      nvarchar(max) NULL,
     SourceQuery       nvarchar(max) NULL,
     UseNoLock         bit NOT NULL CONSTRAINT DF_ExtractJob_UseNoLock DEFAULT (0),
-    LoadMode          tinyint NOT NULL CONSTRAINT CK_ExtractJob_LoadMode CHECK (LoadMode IN (1,2,3)),
+    LoadMode          tinyint NOT NULL CONSTRAINT CK_ExtractJob_LoadMode CHECK (LoadMode IN (1,2,3,4)),
     WatermarkColumn   sysname NULL,
     SchemaPolicy      tinyint NOT NULL CONSTRAINT DF_ExtractJob_SchemaPolicy DEFAULT (1)
                       CONSTRAINT CK_ExtractJob_SchemaPolicy CHECK (SchemaPolicy IN (1,2)),  -- 1=Strict, 2=Evolve
@@ -412,4 +414,41 @@ SELECT 'Export', e.ExportJobId, e.Name, e.IsActive, e.CronExpression,
        r.RowsExported, r.ErrorMessage
 FROM etl.ExportJob e
 OUTER APPLY (SELECT TOP (1) * FROM etl.ExportRun er WHERE er.ExportJobId = e.ExportJobId ORDER BY er.ExportRunId DESC) r;
+GO
+
+/* ---------------- Merge (upsert) load mode ----------------
+   LoadMode 4 = Merge: KeyColumns = source column names identifying a row (comma separated),
+   MergeDeleteMissing = delete target rows whose key is missing from a full read (not with a watermark).
+   LoadRun.RowsInserted/Updated/Deleted: what a merge changed (RowsLoaded = rows read). */
+IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_ExtractJob_LoadMode' AND definition NOT LIKE N'%4%')
+BEGIN
+    ALTER TABLE etl.ExtractJob DROP CONSTRAINT CK_ExtractJob_LoadMode;
+    ALTER TABLE etl.ExtractJob ADD CONSTRAINT CK_ExtractJob_LoadMode CHECK (LoadMode IN (1,2,3,4));
+END
+IF COL_LENGTH(N'etl.ExtractJob', N'KeyColumns') IS NULL ALTER TABLE etl.ExtractJob ADD KeyColumns nvarchar(1000) NULL;
+IF COL_LENGTH(N'etl.ExtractJob', N'MergeDeleteMissing') IS NULL ALTER TABLE etl.ExtractJob ADD MergeDeleteMissing bit NOT NULL CONSTRAINT DF_ExtractJob_MergeDeleteMissing DEFAULT (0);
+IF COL_LENGTH(N'etl.LoadRun', N'RowsInserted') IS NULL ALTER TABLE etl.LoadRun ADD RowsInserted bigint NULL, RowsUpdated bigint NULL, RowsDeleted bigint NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = N'CK_ExtractJob_MergeKey')
+    ALTER TABLE etl.ExtractJob ADD CONSTRAINT CK_ExtractJob_MergeKey CHECK (LoadMode <> 4 OR KeyColumns IS NOT NULL);
+GO
+
+/* ---------------- Data protection: masking rules ----------------
+   ColumnPattern: column name patterns (; separated, * ? wildcards); ScopePattern: "Database.Schema.Table" pattern.
+   Method: 1 = Hash (HMAC-SHA256 with the Secrets:Key derived key), 2 = Partial (KeepLast visible), 3 = Email, 4 = Redact, 5 = Null.
+   AppliesTo: 1 = exported files only, 2 = already when collecting (the DWH holds masked values) and therefore in exports.
+   The export guard mode is etl.SystemSetting 'Privacy.ExportGuard' (Off / Warn / Block). */
+IF OBJECT_ID(N'etl.MaskingRule', N'U') IS NULL
+CREATE TABLE etl.MaskingRule (
+    MaskingRuleId  int IDENTITY(1,1) NOT NULL CONSTRAINT PK_MaskingRule PRIMARY KEY,
+    Name           nvarchar(100) NOT NULL CONSTRAINT UQ_MaskingRule_Name UNIQUE,
+    ColumnPattern  nvarchar(400) NOT NULL,
+    ScopePattern   nvarchar(400) NOT NULL CONSTRAINT DF_MaskingRule_Scope DEFAULT (N'*'),
+    Method         tinyint NOT NULL CONSTRAINT CK_MaskingRule_Method CHECK (Method BETWEEN 1 AND 5),
+    KeepLast       int NOT NULL CONSTRAINT DF_MaskingRule_KeepLast DEFAULT (4),
+    AppliesTo      tinyint NOT NULL CONSTRAINT CK_MaskingRule_AppliesTo CHECK (AppliesTo IN (1,2)),
+    IsActive       bit NOT NULL CONSTRAINT DF_MaskingRule_Active DEFAULT (1),
+    ModifiedBy     nvarchar(256) NOT NULL,
+    ModifiedAtUtc  datetime2(3) NOT NULL CONSTRAINT DF_MaskingRule_Modified DEFAULT (SYSUTCDATETIME())
+);
 GO

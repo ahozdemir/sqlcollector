@@ -26,7 +26,7 @@ public static class SourceCommandBuilder
 
         var predicates = new List<string>();
         if (!string.IsNullOrWhiteSpace(job.FilterClause)) predicates.Add($"({job.FilterClause})");
-        if (job.LoadMode == LoadMode.Incremental && hasWatermark)
+        if (job.UsesWatermark() && hasWatermark)
             predicates.Add($"{SqlIdent.Quote(job.WatermarkColumn!)} > {WatermarkParam}");
         if (predicates.Count > 0) sb.Append(" WHERE ").Append(string.Join(" AND ", predicates));
         return sb.ToString();
@@ -40,6 +40,8 @@ public sealed class ExtractRunner(
     MetadataRepository repo,
     SqlConnectionFactory factory,
     TargetTableManager tableManager,
+    MergeLoader mergeLoader,
+    Privacy.MaskingService masking,
     DependencyService dependencies,
     IOptions<CollectorOptions> options,
     ILogger<ExtractRunner> logger)
@@ -72,19 +74,20 @@ public sealed class ExtractRunner(
             return;
         }
 
-        var state = job.LoadMode == LoadMode.Incremental ? await repo.GetExtractStateAsync(extractJobId) : null;
+        var state = job.UsesWatermark() ? await repo.GetExtractStateAsync(extractJobId) : null;
         var loadId = await repo.StartLoadRunAsync(job, state?.WatermarkValue, triggeredBy);
         var loadedAtUtc = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
 
         SqlConnection? targetConn = null;
         var rebuild = job.LoadMode == LoadMode.Replace && job.ReplaceRebuild;
+        var merge = job.LoadMode == LoadMode.Merge;
         var swapped = false;
         try
         {
-            if (rebuild) await ValidateRebuildAsync(job);
+            if (rebuild || merge) await ValidateSingleWriterAsync(job);
             targetConn = await factory.OpenAsync(target, job.TargetDatabase, forWrite: true, ct);
-            var (rows, wmType, wmValue) = await CopyAsync(job, source, state, loadId, loadedAtUtc, targetConn, rebuild, ct);
+            var (rows, wmType, wmValue, mergeCounts) = await CopyAsync(job, source, state, loadId, loadedAtUtc, targetConn, rebuild, ct);
 
             if (rebuild)
             {
@@ -93,9 +96,10 @@ public sealed class ExtractRunner(
                 swapped = true;
             }
 
-            await repo.CompleteLoadRunAsync(loadId, extractJobId, rows, wmType, wmValue);
-            logger.LogInformation("Extract {Name}: {Rows:N0} rows, {Sec:N1} s (LoadId={LoadId}, watermark={Wm}{Rebuild})",
-                job.Name, rows, sw.Elapsed.TotalSeconds, loadId, wmValue ?? state?.WatermarkValue ?? "-", rebuild ? ", table rebuilt" : "");
+            await repo.CompleteLoadRunAsync(loadId, extractJobId, rows, wmType, wmValue, mergeCounts);
+            logger.LogInformation("Extract {Name}: {Rows:N0} rows, {Sec:N1} s (LoadId={LoadId}, watermark={Wm}{Rebuild}{Merge})",
+                job.Name, rows, sw.Elapsed.TotalSeconds, loadId, wmValue ?? state?.WatermarkValue ?? "-", rebuild ? ", table rebuilt" : "",
+                mergeCounts is { } mc ? $", merge: {mc.Inserted:N0} inserted, {mc.Updated:N0} updated, {mc.Deleted:N0} deleted" : "");
 
             if (job.LoadMode == LoadMode.Replace && !rebuild)
             {
@@ -127,7 +131,8 @@ public sealed class ExtractRunner(
                     try { await tableManager.DropRebuildStagingAsync(targetConn, job.TargetSchema, job.TargetTable, CancellationToken.None); }
                     catch (Exception dropEx) { logger.LogWarning(dropEx, "Rebuild {Name}: could not drop the staging table; the next run drops it.", job.Name); }
             }
-            else cleaned = targetConn is null || await CleanupLoadAsync(targetConn, job, loadId);
+            // a merge is applied in one transaction: a failure rolled it back, and a committed merge must never be deleted by _LoadId
+            else cleaned = targetConn is null || merge || await CleanupLoadAsync(targetConn, job, loadId);
             // A load that cannot be cleaned stays 'CleanupPending'; the sync job retries; incremental exports do not move past it until cleaned
             await repo.FailLoadRunAsync(loadId, cleaned ? "Failed" : "CleanupPending", MetadataRepository.Truncate(ex));
             throw; // Hangfire retry
@@ -138,20 +143,21 @@ public sealed class ExtractRunner(
         }
     }
 
-    /// <summary>Rebuild replaces the whole table: only for a table this job alone writes to, without daily partitions.</summary>
-    private async Task ValidateRebuildAsync(ExtractJobDef job)
+    /// <summary>Rebuild replaces the whole table and Merge keeps one row per key: only for a table this job alone writes to, without daily partitions.</summary>
+    private async Task ValidateSingleWriterAsync(ExtractJobDef job)
     {
+        var what = job.LoadMode == LoadMode.Merge ? "Merge" : "Replace with rebuild";
         if (job.PartitionDaily)
-            throw new InvalidOperationException("Replace with rebuild cannot be combined with daily partitioning.");
+            throw new InvalidOperationException($"{what} cannot be combined with daily partitioning.");
         var others = (await repo.GetExtractJobsAsync()).Where(j => j.ExtractJobId != job.ExtractJobId && j.TargetServerId == job.TargetServerId
             && j.TargetDatabase.Equals(job.TargetDatabase, StringComparison.OrdinalIgnoreCase)
             && j.TargetSchema.Equals(job.TargetSchema, StringComparison.OrdinalIgnoreCase)
             && j.TargetTable.Equals(job.TargetTable, StringComparison.OrdinalIgnoreCase)).Select(j => j.Name).ToList();
         if (others.Count > 0)
-            throw new InvalidOperationException($"Replace with rebuild needs a target table that only this job writes to; also written by: {string.Join(", ", others)}.");
+            throw new InvalidOperationException($"{what} needs a target table that only this job writes to; also written by: {string.Join(", ", others)}.");
     }
 
-    private async Task<(long Rows, string? WmType, string? WmValue)> CopyAsync(
+    private async Task<(long Rows, string? WmType, string? WmValue, MergeCounts? Merge)> CopyAsync(
         ExtractJobDef job, SqlServerDef sourceServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
         bool rebuild, CancellationToken ct)
     {
@@ -161,7 +167,7 @@ public sealed class ExtractRunner(
         await using var cmd = source.CreateCommand();
         cmd.CommandText = SourceCommandBuilder.BuildSql(job, hasWatermark);
         cmd.CommandTimeout = job.CommandTimeoutSec;
-        if (job.LoadMode == LoadMode.Incremental && (hasWatermark || job.SourceType == SourceType.Query))
+        if (job.UsesWatermark() && (hasWatermark || job.SourceType == SourceType.Query))
             cmd.Parameters.Add(Watermark.ToParameter(SourceCommandBuilder.WatermarkParam, state?.WatermarkType, state?.WatermarkValue));
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -171,13 +177,32 @@ public sealed class ExtractRunner(
             throw new InvalidOperationException("The source query returned no result set.");
 
         var schema = reader.GetColumnSchema();
+
+        // data protection: rules that apply while collecting (matched against the source object and the target table)
+        var policy = await masking.GetPolicyAsync();
+        var objects = new[]
+        {
+            job.SourceType == SourceType.Table ? $"{job.SourceDatabase}.{job.SourceSchema ?? "dbo"}.{job.SourceTable}" : $"{job.SourceDatabase}.(query)",
+            $"{job.TargetDatabase}.{job.TargetSchema}.{job.TargetTable}"
+        };
+        var masks = policy.ForExtract(objects, schema.Select(c => c.ColumnName).ToList());
+        for (int i = 0; i < masks.Length; i++)
+            if (masks[i] is not null && job.UsesWatermark() && string.Equals(schema[i].ColumnName, job.WatermarkColumn, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogWarning("Extract {Name}: the watermark column {Column} is never masked (rule {Rule} ignored).", job.Name, schema[i].ColumnName, masks[i]!.Rule.Name);
+                masks[i] = null;
+            }
+        if (masks.Any(m => m is not null))
+            logger.LogInformation("Extract {Name}: masking {Columns}", job.Name, string.Join(", ", masks.Where(m => m is not null).Select(m => m!.Describe())));
+        var targetColumns = Privacy.MaskedDbColumn.Apply(schema, masks);
+
         var map = rebuild
-            ? await tableManager.PrepareRebuildAsync(collector, job.TargetSchema, job.TargetTable, schema, ct)
-            : await tableManager.EnsureAsync(collector, job.TargetSchema, job.TargetTable, schema, job.SchemaPolicy, job.PartitionDaily, ct);
+            ? await tableManager.PrepareRebuildAsync(collector, job.TargetSchema, job.TargetTable, targetColumns, ct)
+            : await tableManager.EnsureAsync(collector, job.TargetSchema, job.TargetTable, targetColumns, job.SchemaPolicy, job.PartitionDaily, ct);
 
         int? wmOrdinal = null;
         string? wmType = null;
-        if (job.LoadMode == LoadMode.Incremental)
+        if (job.UsesWatermark())
         {
             var wmCol = schema.FirstOrDefault(c => string.Equals(c.ColumnName, job.WatermarkColumn, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException($"Watermark column '{job.WatermarkColumn}' is not in the result set.");
@@ -185,11 +210,30 @@ public sealed class ExtractRunner(
             wmType = Watermark.NormalizeType(wmCol.DataTypeName);
         }
 
-        using var augmented = new AugmentedDataReader(reader, loadId, loadedAtUtc, job.ExtractJobId, job.SourceServerName, wmOrdinal);
-        // rebuild: empty staging table, TABLOCK allows minimal logging
-        using var bulk = new SqlBulkCopy(collector, rebuild ? SqlBulkCopyOptions.KeepNulls | SqlBulkCopyOptions.TableLock : SqlBulkCopyOptions.KeepNulls, null)
+        MergePlan? plan = null;
+        if (job.LoadMode == LoadMode.Merge)
         {
-            DestinationTableName = SqlIdent.Quote(job.TargetSchema, rebuild ? job.TargetTable + TargetTableManager.RebuildSuffix : job.TargetTable),
+            var keys = job.KeyColumnList();
+            if (keys.Count == 0) throw new InvalidOperationException("Merge needs at least one key column.");
+            var missing = keys.Where(k => !schema.Any(c => string.Equals(c.ColumnName, k, StringComparison.OrdinalIgnoreCase))).ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException($"Merge key column(s) not in the source result set: {string.Join(", ", missing)}.");
+            var keyTargets = keys.Select(k => map[k]).ToList();
+            await tableManager.EnsureMergeKeyAsync(collector, job.TargetSchema, job.TargetTable, keyTargets, ct);
+            var others = schema.Select(c => map[c.ColumnName]).Where(n => !keyTargets.Contains(n, StringComparer.OrdinalIgnoreCase)).ToList();
+            plan = new MergePlan(job.TargetSchema, job.TargetTable, keyTargets, others,
+                await mergeLoader.GetXmlColumnsAsync(collector, job.TargetSchema, job.TargetTable, ct),
+                DeleteMissing: job.MergeDeleteMissing && !job.UsesWatermark(), job.ExtractJobId);
+            // rows go to a session temp table first; the target changes only in the final merge transaction
+            await mergeLoader.CreateStagingAsync(collector, job.TargetSchema, job.TargetTable, ct);
+        }
+
+        using var augmented = new AugmentedDataReader(reader, loadId, loadedAtUtc, job.ExtractJobId, job.SourceServerName, wmOrdinal, masks);
+        // rebuild: empty staging table, TABLOCK allows minimal logging
+        using var bulk = new SqlBulkCopy(collector, rebuild || plan is not null ? SqlBulkCopyOptions.KeepNulls | SqlBulkCopyOptions.TableLock : SqlBulkCopyOptions.KeepNulls, null)
+        {
+            DestinationTableName = plan is not null ? MergeSql.Staging
+                : SqlIdent.Quote(job.TargetSchema, rebuild ? job.TargetTable + TargetTableManager.RebuildSuffix : job.TargetTable),
             BatchSize = job.BatchSize,
             BulkCopyTimeout = 0,
             NotifyAfter = Math.Max(job.BatchSize * 10, 100_000)
@@ -203,8 +247,10 @@ public sealed class ExtractRunner(
 
         await bulk.WriteToServerAsync(augmented, ct);
 
+        var mergeCounts = plan is null ? null : await mergeLoader.MergeAsync(collector, plan, augmented.RowsRead, job.Name, ct);
+
         string? wmValue = augmented.MaxWatermark is null ? null : Watermark.Serialize(augmented.MaxWatermark);
-        return (augmented.RowsRead, wmValue is null ? null : wmType, wmValue);
+        return (augmented.RowsRead, wmValue is null ? null : wmType, wmValue, mergeCounts);
     }
 
     private async Task<bool> CleanupLoadAsync(SqlConnection collector, ExtractJobDef job, long loadId)

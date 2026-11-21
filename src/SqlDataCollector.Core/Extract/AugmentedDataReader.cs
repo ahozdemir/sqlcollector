@@ -19,6 +19,7 @@ public sealed class AugmentedDataReader : DbDataReader
     private readonly int? _watermarkOrdinal;
     private readonly SqlDataReader? _sql;
     private readonly bool[] _isDecimal;
+    private readonly Privacy.ColumnMask?[] _masks;
 
     private static readonly string[] ExtraNames = SqlIdent.TechnicalColumns;
     private static readonly Type[] ExtraTypes = [typeof(long), typeof(DateTime), typeof(int), typeof(string)];
@@ -27,13 +28,16 @@ public sealed class AugmentedDataReader : DbDataReader
     public long RowsRead { get; private set; }
     public object? MaxWatermark { get; private set; }
 
-    public AugmentedDataReader(DbDataReader inner, long loadId, DateTime loadedAtUtc, int extractJobId, string sourceServer, int? watermarkOrdinal)
+    /// <param name="masks">Per source column: masking applied while collecting (null = unchanged).</param>
+    public AugmentedDataReader(DbDataReader inner, long loadId, DateTime loadedAtUtc, int extractJobId, string sourceServer, int? watermarkOrdinal,
+        Privacy.ColumnMask?[]? masks = null)
     {
         _inner = inner;
         _baseCount = inner.FieldCount;
         _extraValues = [loadId, loadedAtUtc, extractJobId, sourceServer];
         _watermarkOrdinal = watermarkOrdinal;
         _sql = inner as SqlDataReader;
+        _masks = masks ?? new Privacy.ColumnMask?[_baseCount];
         // decimal(38,x) values can exceed .NET decimal (28-29 digits) -> pass as SqlDecimal
         _isDecimal = Enumerable.Range(0, _baseCount)
             .Select(i => _sql is not null && inner.GetDataTypeName(i).ToLowerInvariant() is "decimal" or "numeric")
@@ -41,6 +45,9 @@ public sealed class AugmentedDataReader : DbDataReader
     }
 
     private bool IsExtra(int i) => i >= _baseCount;
+    private bool IsMasked(int i) => i < _baseCount && _masks[i] is not null;
+    /// <summary>Masked to text (Null keeps the original type: its value is always NULL).</summary>
+    private bool IsMaskedText(int i) => IsMasked(i) && _masks[i]!.Rule.Method != Privacy.MaskMethod.Null;
     private int Ex(int i) => i - _baseCount;
 
     public override bool Read()
@@ -67,8 +74,8 @@ public sealed class AugmentedDataReader : DbDataReader
     public override int RecordsAffected => _inner.RecordsAffected;
 
     public override string GetName(int ordinal) => IsExtra(ordinal) ? ExtraNames[Ex(ordinal)] : _inner.GetName(ordinal);
-    public override string GetDataTypeName(int ordinal) => IsExtra(ordinal) ? ExtraSqlTypes[Ex(ordinal)] : _inner.GetDataTypeName(ordinal);
-    public override Type GetFieldType(int ordinal) => IsExtra(ordinal) ? ExtraTypes[Ex(ordinal)] : _inner.GetFieldType(ordinal);
+    public override string GetDataTypeName(int ordinal) => IsExtra(ordinal) ? ExtraSqlTypes[Ex(ordinal)] : IsMaskedText(ordinal) ? "nvarchar" : _inner.GetDataTypeName(ordinal);
+    public override Type GetFieldType(int ordinal) => IsExtra(ordinal) ? ExtraTypes[Ex(ordinal)] : IsMaskedText(ordinal) ? typeof(string) : _inner.GetFieldType(ordinal);
 
     public override int GetOrdinal(string name)
     {
@@ -80,6 +87,12 @@ public sealed class AugmentedDataReader : DbDataReader
     public override object GetValue(int ordinal)
     {
         if (IsExtra(ordinal)) return _extraValues[Ex(ordinal)];
+        if (IsMasked(ordinal))
+        {
+            if (_inner.IsDBNull(ordinal)) return DBNull.Value;
+            var raw = _isDecimal[ordinal] ? _sql!.GetSqlDecimal(ordinal) : _inner.GetValue(ordinal);
+            return _masks[ordinal]!.Apply(Privacy.Masker.ToText(raw)) is { } masked ? masked : DBNull.Value;
+        }
         if (_isDecimal[ordinal])
             return _sql!.IsDBNull(ordinal) ? DBNull.Value : _sql.GetSqlDecimal(ordinal);
         return _inner.GetValue(ordinal);
@@ -92,7 +105,7 @@ public sealed class AugmentedDataReader : DbDataReader
         return n;
     }
 
-    public override bool IsDBNull(int ordinal) => !IsExtra(ordinal) && _inner.IsDBNull(ordinal);
+    public override bool IsDBNull(int ordinal) => !IsExtra(ordinal) && (IsMasked(ordinal) ? GetValue(ordinal) is DBNull : _inner.IsDBNull(ordinal));
 
     public override bool GetBoolean(int ordinal) => IsExtra(ordinal) ? (bool)GetValue(ordinal) : _inner.GetBoolean(ordinal);
     public override byte GetByte(int ordinal) => IsExtra(ordinal) ? Convert.ToByte(GetValue(ordinal)) : _inner.GetByte(ordinal);
@@ -109,7 +122,7 @@ public sealed class AugmentedDataReader : DbDataReader
     public override short GetInt16(int ordinal) => IsExtra(ordinal) ? Convert.ToInt16(GetValue(ordinal)) : _inner.GetInt16(ordinal);
     public override int GetInt32(int ordinal) => IsExtra(ordinal) ? Convert.ToInt32(GetValue(ordinal)) : _inner.GetInt32(ordinal);
     public override long GetInt64(int ordinal) => IsExtra(ordinal) ? Convert.ToInt64(GetValue(ordinal)) : _inner.GetInt64(ordinal);
-    public override string GetString(int ordinal) => IsExtra(ordinal) ? (string)GetValue(ordinal) : _inner.GetString(ordinal);
+    public override string GetString(int ordinal) => IsExtra(ordinal) || IsMasked(ordinal) ? (string)GetValue(ordinal) : _inner.GetString(ordinal);
 
     public override bool NextResult() => false;
     public override IEnumerator GetEnumerator() => new DbEnumerator(this, closeReader: false);

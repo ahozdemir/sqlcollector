@@ -216,20 +216,21 @@
             <div class="row g-2">
                 <div class="col-md-5">
                     <label class="form-label small">Load mode</label>
-                    <select class="form-select form-select-sm" @bind="job.LoadMode">
+                    <select class="form-select form-select-sm" @bind="job.LoadMode" @bind:after="LoadModeChanged">
                         <option value="@LoadMode.Append">Append – add rows on every run (snapshot history)</option>
                         <option value="@LoadMode.Replace">Replace – keep only the latest successful load</option>
                         <option value="@LoadMode.Incremental">Incremental – only new rows by a watermark column</option>
+                        <option value="@LoadMode.Merge">Merge – upsert by key (update changed rows, insert new ones)</option>
                     </select>
                 </div>
                 <div class="col-md-4">
-                    @if (job.LoadMode == LoadMode.Incremental)
+                    @if (job.LoadMode is LoadMode.Incremental or LoadMode.Merge)
                     {
-                        <label class="form-label small">Watermark column</label>
+                        <label class="form-label small">@(job.LoadMode == LoadMode.Merge ? "Watermark column (optional – empty = read everything)" : "Watermark column")</label>
                         @if (WatermarkCandidates.Count > 0)
                         {
                             <select class="form-select form-select-sm mono" @bind="job.WatermarkColumn">
-                                <option value="">Choose…</option>
+                                <option value="">@(job.LoadMode == LoadMode.Merge ? "(none – full read)" : "Choose…")</option>
                                 @foreach (var c in WatermarkCandidates) { <option value="@c.Name">@c.Name (@c.TypeDeclaration)</option> }
                             </select>
                         }
@@ -253,17 +254,17 @@
                 </div>
                 <div class="col-md-3">
                     <label class="form-label small">Retention (days) <HelpLink Topic="retention" Title="Retention" /></label>
-                    @if (job.LoadMode == LoadMode.Replace)
+                    @if (job.LoadMode.KeepsCurrentStateOnly())
                     {
                         <input class="form-control form-control-sm" value="not applicable" disabled />
-                        <div class="form-text">Replace keeps only the latest successful load; retention does not apply.</div>
+                        <div class="form-text">@(job.LoadMode == LoadMode.Merge ? "Merge keeps the current state of the source" : "Replace keeps only the latest successful load"); retention does not apply.</div>
                     }
                     else
                     {
                     <input type="number" min="1" class="form-control form-control-sm" @bind="job.RetentionDays" placeholder="keep forever"
                            disabled="@(!isAdmin && policy is { EditorsMayChange: false })" />
                     }
-                    @if (policy is not null && job.LoadMode != LoadMode.Replace)
+                    @if (policy is not null && !job.LoadMode.KeepsCurrentStateOnly())
                     {
                         <div class="form-text">Policy: @(policy.MaxDays is { } max ? $"max {max} days" : "no maximum")
                             · @(policy.AllowKeepForever ? "keep forever allowed" : "keep forever not allowed")
@@ -279,7 +280,42 @@
                     <input type="number" min="30" class="form-control form-control-sm" @bind="job.CommandTimeoutSec" />
                 </div>
             </div>
-            @if (!IsNew && job.LoadMode == LoadMode.Incremental)
+            @if (job.LoadMode == LoadMode.Merge)
+            {
+                <div class="mt-3">
+                    <label class="form-label small mb-1">Key columns – identify one row <HelpLink Topic="merge" Title="Merge (upsert)" /></label>
+                    @if (KeyCandidates.Count > 0)
+                    {
+                        <div class="d-flex flex-wrap gap-3 border rounded p-2 bg-white">
+                            @foreach (var c in KeyCandidates)
+                            {
+                                var id = "key-" + c.Name;
+                                <div class="form-check mb-0" @key="c.Name">
+                                    <input class="form-check-input" type="checkbox" id="@id" checked="@MergeKeys.Contains(c.Name, StringComparer.OrdinalIgnoreCase)"
+                                           @onchange="e => ToggleKey(c.Name, e.Value is true)" />
+                                    <label class="form-check-label small mono" for="@id">@c.Name @if (c.KeyOrdinal > 0) { <span class="badge bg-light text-dark border">PK</span> }</label>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <input class="form-control form-control-sm mono" @bind="job.KeyColumns" placeholder="CustomerId (comma separated; run Preview to pick from the result columns)" />
+                    }
+                    <div class="form-text">
+                        Selected: <span class="mono">@(MergeKeys.Count == 0 ? "none" : string.Join(", ", MergeKeys))</span>.
+                        Changed rows are updated and new keys inserted in one transaction; unchanged rows are not touched (incremental exports only send what changed).
+                    </div>
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" id="mergeDelete" @bind="job.MergeDeleteMissing" disabled="@(!string.IsNullOrWhiteSpace(job.WatermarkColumn))" />
+                        <label class="form-check-label small" for="mergeDelete">Delete rows whose key the source no longer returns</label>
+                        <div class="form-text">@(string.IsNullOrWhiteSpace(job.WatermarkColumn)
+                            ? "Needs the full read (no watermark). A run that reads no rows at all never deletes."
+                            : "Not available with a watermark column: an incremental read only returns changed rows.")</div>
+                    </div>
+                </div>
+            }
+            @if (!IsNew && job.UsesWatermark())
             {
                 <div class="small mt-2">Current watermark: <span class="mono">@(state?.WatermarkValue ?? "(none – the first run reads everything)")</span>
                     @if (canEdit && state?.WatermarkValue is not null) { <button class="btn btn-link btn-sm text-danger p-0 ms-2" @onclick="ResetWatermarkAsync">reset</button> }
@@ -365,6 +401,30 @@
     private IReadOnlyList<ColumnInfo> WatermarkCandidates =>
         (job.SourceType == SourceType.Table ? columns : preview?.Schema ?? [])
         .Where(c => WatermarkTypes.Any(t => c.TypeDeclaration.StartsWith(t, StringComparison.OrdinalIgnoreCase))).ToList();
+
+    // Merge: key columns come from the table columns (or the preview of a query); the primary key is suggested
+    private IReadOnlyList<ColumnInfo> KeyCandidates =>
+        (job.SourceType == SourceType.Table ? columns.Where(c => advancedColumns || selectedColumns.Count == 0 || selectedColumns.Contains(c.Name)) : preview?.Schema ?? []).ToList();
+    private IReadOnlyList<string> MergeKeys => job.KeyColumnList();
+
+    private void ToggleKey(string name, bool on)
+    {
+        var keys = MergeKeys.Where(k => !k.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (on) keys.Add(name);
+        // keep the column order of the source
+        var order = KeyCandidates.Select(c => c.Name).ToList();
+        keys = keys.OrderBy(k => order.FindIndex(o => o.Equals(k, StringComparison.OrdinalIgnoreCase)) is var i && i >= 0 ? i : int.MaxValue).ToList();
+        job.KeyColumns = keys.Count == 0 ? null : string.Join(", ", keys);
+    }
+
+    private void LoadModeChanged() => SuggestPrimaryKey();
+
+    private void SuggestPrimaryKey()
+    {
+        if (job.LoadMode != LoadMode.Merge || MergeKeys.Count > 0) return;
+        var pk = columns.Where(c => c.KeyOrdinal > 0).OrderBy(c => c.KeyOrdinal).Select(c => c.Name).ToList();
+        if (job.SourceType == SourceType.Table && pk.Count > 0) job.KeyColumns = string.Join(", ", pk);
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -497,6 +557,7 @@
             {
                 foreach (var c in columns) selectedColumns.Add(c.Name);
             }
+            SuggestPrimaryKey();
         });
     }
 
@@ -586,7 +647,7 @@
                 throw new InvalidOperationException("You are not allowed to write to this target database.");
             // retention policy, enforced server-side with the current policy (it may have changed since the page was opened)
             var currentPolicy = await SettingsService.GetRetentionPolicyAsync();
-            if (job.LoadMode == LoadMode.Replace) job.RetentionDays = null;   // not applicable: only the latest load is kept
+            if (job.LoadMode.KeepsCurrentStateOnly()) job.RetentionDays = null;   // not applicable: only the latest load / the current state is kept
             if (currentPolicy.ValidateJob(job.RetentionDays, originalRetention, IsNew, await Access.IsAdminAsync(), job.LoadMode) is { } retentionError)
                 throw new InvalidOperationException(retentionError);
             if (await Dependencies.ValidateAsync(new JobRef(JobRef.Extract, job.ExtractJobId), job.TriggerMode, upstreams) is { } dependencyError)
@@ -633,10 +694,13 @@
             && o.TargetSchema.Equals(j.TargetSchema, StringComparison.OrdinalIgnoreCase)
             && o.TargetTable.Equals(j.TargetTable, StringComparison.OrdinalIgnoreCase);
         var others = all.Where(Same).ToList();
-        if (j.ReplaceRebuild && others.Count > 0)
-            throw new InvalidOperationException($"Replace with rebuild needs a target table that only this job writes to; also written by: {string.Join(", ", others.Select(o => o.Name))}.");
+        var what = j.LoadMode == LoadMode.Merge ? "Merge" : "Replace with rebuild";
+        if ((j.ReplaceRebuild || j.LoadMode == LoadMode.Merge) && others.Count > 0)
+            throw new InvalidOperationException($"{what} needs a target table that only this job writes to; also written by: {string.Join(", ", others.Select(o => o.Name))}.");
         if (others.FirstOrDefault(o => o.LoadMode == LoadMode.Replace && o.ReplaceRebuild) is { } rebuilder)
             throw new InvalidOperationException($"Job '{rebuilder.Name}' rebuilds this target table on every run; choose another target table.");
+        if (others.FirstOrDefault(o => o.LoadMode == LoadMode.Merge) is { } merger)
+            throw new InvalidOperationException($"Job '{merger.Name}' merges into this target table (one row per key); choose another target table.");
     }
 
     private void Validate()
@@ -653,6 +717,16 @@
         if (job.SourceType == SourceType.Table && !advancedColumns && selectedTables.Count == 1 && selectedColumns.Count == 0) errs.Add("Select at least one column.");
         if (job.LoadMode == LoadMode.Incremental && string.IsNullOrWhiteSpace(job.WatermarkColumn)) errs.Add("Choose a watermark column for Incremental mode.");
         if (job.LoadMode == LoadMode.Incremental && MultiTable) errs.Add("Incremental cannot be used with multiple tables (each table has its own watermark column). Choose Append/Replace or create the jobs one by one.");
+        if (job.LoadMode == LoadMode.Merge)
+        {
+            job.WatermarkColumn = string.IsNullOrWhiteSpace(job.WatermarkColumn) ? null : job.WatermarkColumn.Trim();
+            job.KeyColumns = MergeKeys.Count == 0 ? null : string.Join(", ", MergeKeys);
+            if (MergeKeys.Count == 0) errs.Add("Choose the key column(s) that identify a row for Merge.");
+            if (MultiTable) errs.Add("Merge cannot be used with multiple tables (each table has its own key). Create the jobs one by one.");
+            if (job.PartitionDaily) errs.Add("Merge cannot be combined with daily partitioning.");
+            if (job.MergeDeleteMissing && job.WatermarkColumn is not null) errs.Add("Deleting missing rows needs a full read: clear the watermark column or untick the option.");
+        }
+        else { job.KeyColumns = null; job.MergeDeleteMissing = false; }
         if (job.TargetServerId == 0 || string.IsNullOrEmpty(job.TargetDatabase)) errs.Add("Choose a target server and database.");
         if (string.IsNullOrWhiteSpace(job.TargetSchema)) errs.Add("Target schema is required.");
         if (!MultiTable && string.IsNullOrWhiteSpace(job.TargetTable)) errs.Add("Target table name is required.");
@@ -669,7 +743,7 @@
         if (job.CommandTimeoutSec < 30) job.CommandTimeoutSec = 3600;
         if (job.SourceType == SourceType.Query) { job.SourceTable = null; job.ColumnList = null; job.FilterClause = null; }
         else job.SourceQuery = null;
-        if (job.LoadMode != LoadMode.Incremental) job.WatermarkColumn = null;
+        if (!job.UsesWatermark()) job.WatermarkColumn = null;
         if (errs.Count > 0) throw new InvalidOperationException(string.Join("\n", errs));
     }
 
