@@ -208,15 +208,17 @@ IF DB_ID(N'$DwhDb') IS NOT NULL BEGIN ALTER DATABASE [$DwhDb] SET SINGLE_USER WI
         $app = Join-Path $out 'app'
         $zip = Join-Path $out 'payload.zip'
         if (Test-Path $out) { Remove-Item $out -Recurse -Force }
-        Write-Step 'Publishing the application (self-contained, win-x64)'
-        & dotnet publish $AppProject -c Release -r win-x64 --self-contained true -p:PublishReadyToRun=false -o $app
+        # version from the release tag (CI sets SDC_VERSION, e.g. 1.2.0); shown in the UI and in Apps & features
+        $versionArgs = @(); if ($env:SDC_VERSION) { $versionArgs += "-p:Version=$env:SDC_VERSION" }
+        Write-Step "Publishing the application (self-contained, win-x64)$(if ($env:SDC_VERSION) { ', version ' + $env:SDC_VERSION })"
+        & dotnet publish $AppProject -c Release -r win-x64 --self-contained true -p:PublishReadyToRun=false @versionArgs -o $app
         if ($LASTEXITCODE -ne 0) { throw 'dotnet publish of the application failed' }
         Remove-Item (Join-Path $app 'appsettings.LocalTest.json') -ErrorAction SilentlyContinue   # never ship the developer configuration
         Write-Step 'Packing payload.zip'
         Compress-Archive -Path (Join-Path $app '*') -DestinationPath $zip -CompressionLevel Optimal
         Write-Step 'Publishing SqlDataCollector-Setup.exe (single file, self-contained, payload embedded)'
         & dotnet publish (Join-Path $Root 'installer/SqlDataCollector.Setup') -c Release -r win-x64 --self-contained true `
-            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:PayloadZip=$zip" -o (Join-Path $out 'dist')
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:PayloadZip=$zip" @versionArgs -o (Join-Path $out 'dist')
         if ($LASTEXITCODE -ne 0) { throw 'dotnet publish of the setup failed' }
         $exe = Get-Item (Join-Path $out 'dist/SqlDataCollector-Setup.exe')
         Write-Host ("Ready: {0} ({1:N0} MB)" -f $exe.FullName, ($exe.Length / 1MB)) -ForegroundColor Green

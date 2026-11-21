@@ -1,0 +1,94 @@
+# Builds SqlDataCollector-Setup.exe and publishes it as a GitHub Release of THIS repository.
+#   Release:  git tag v1.0.0  &&  git push origin v1.0.0
+#   Test build without a release: Actions → "Release installer" → Run workflow (the exe is kept as a workflow artifact)
+# Runs on a GitHub-hosted Windows runner; uses only this repository's GITHUB_TOKEN (contents: write).
+name: Release installer
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the release and upload its files – nothing else
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET (from global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          $version = if ($ref -match '^v(\d+\.\d+\.\d+)$') { $Matches[1] } else { '0.0.0' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+
+      - name: Build (warnings are errors)
+        run: dotnet build SqlCollector.sln -c Release -warnaserror -p:Version=${{ steps.version.outputs.version }}
+
+      # Integration tests need Linux containers (Testcontainers), which Windows runners do not provide
+      - name: Unit tests
+        run: dotnet test SqlCollector.sln -c Release --no-build --filter "Category!=Integration" --logger "trx;LogFileName=unit.trx"
+
+      - name: Build the installer
+        shell: powershell
+        env:
+          SDC_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/dev.ps1 installer
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $exe = "artifacts/installer/dist/SqlDataCollector-Setup.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  SqlDataCollector-Setup.exe" | Set-Content "artifacts/installer/dist/SqlDataCollector-Setup.exe.sha256" -Encoding ascii
+          Write-Host "SHA-256: $hash"
+
+      - name: Keep the installer as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SqlDataCollector-Setup-${{ steps.version.outputs.version }}
+          path: |
+            artifacts/installer/dist/SqlDataCollector-Setup.exe
+            artifacts/installer/dist/SqlDataCollector-Setup.exe.sha256
+          retention-days: 14
+
+      - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $files = @("artifacts/installer/dist/SqlDataCollector-Setup.exe", "artifacts/installer/dist/SqlDataCollector-Setup.exe.sha256")
+          $notes = @"
+          Windows installer for SqlDataCollector $tag – one self-contained file (application, .NET runtime and setup wizard).
+
+          **Requirements:** Windows Server joined to an Active Directory domain, a domain service account (or gMSA) and an existing SQL Server.
+          **Install:** run SqlDataCollector-Setup.exe as administrator; silent: ``/silent /config install.json /password-env SDC_PWD``.
+          **Verify:** compare the SHA-256 with SqlDataCollector-Setup.exe.sha256. The file is not code-signed: Windows SmartScreen may warn.
+          "@
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title "SqlDataCollector $tag" --notes $notes --generate-notes
+          }

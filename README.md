@@ -150,6 +150,16 @@ Silent installation: `SqlDataCollector-Setup.exe /silent /config install.json /p
 (the JSON has the wizard's fields, e.g. `{"Mode":"Embedded","ServiceAccount":"CORP\\svc-sdc","SqlServer":"sql01","MetadataDb":"SdcMeta","DwhDb":"DWH","DatabaseAction":"Now","HostName":"sdc.corp.local"}`).
 Running the setup again upgrades the binaries and keeps the configuration. Uninstall: *Apps & features* or `/uninstall [/purge]`.
 
+**GitHub release:** pushing a version tag builds the installer on a GitHub-hosted Windows runner
+(`.github/workflows/release.yml`: build with warnings as errors, unit tests, `dev.ps1 installer`, SHA-256) and attaches
+`SqlDataCollector-Setup.exe` and its `.sha256` to a release of this repository:
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+The version (`1.0.0`) is stamped into the application and the setup. *Actions → Release installer → Run workflow* builds
+without releasing (the exe is kept as a workflow artifact for 14 days). The exe is not code-signed (SmartScreen may warn).
+
 Manual installation (below) remains possible.
 
 ### 4.1 Build
