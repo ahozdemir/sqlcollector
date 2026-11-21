@@ -1,0 +1,55 @@
+@page "/runs"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+
+<PageTitle>Run History</PageTitle>
+
+<div class="d-flex align-items-center mb-3 gap-2">
+    <h1 class="h4 mb-0 me-auto">Run History <HelpLink Topic="troubleshooting" Title="Statuses and troubleshooting" /></h1>
+    <select class="form-select form-select-sm w-auto" @bind="kind" @bind:after="LoadAsync">
+        <option value="">All types</option><option value="Extract">Extract</option><option value="Export">Export</option>
+    </select>
+    <select class="form-select form-select-sm w-auto" @bind="status" @bind:after="LoadAsync">
+        <option value="">All statuses</option>
+        @foreach (var s in new[] { "Running", "Succeeded", "PartiallyFailed", "Failed", "Skipped", "CleanupPending", "Abandoned" }) { <option value="@s">@s</option> }
+    </select>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync">Refresh</button>
+</div>
+
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light">
+        <tr><th>#</th><th>Type</th><th>Job</th><th>Status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th>Detail</th><th>Triggered by</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var r in rows)
+        {
+            <tr @onclick="() => expanded = expanded == r.Kind + r.RunId ? null : r.Kind + r.RunId" style="cursor:pointer">
+                <td class="mono">@r.RunId</td>
+                <td>@r.Kind</td>
+                <td><a href="@(r.Kind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")" @onclick:stopPropagation>@r.JobName</a></td>
+                <td><StatusBadge Status="@r.Status" /></td>
+                <td>@Ui.Local(r.StartedAtUtc)</td>
+                <td>@Ui.Duration(r.StartedAtUtc, r.FinishedAtUtc)</td>
+                <td class="text-end">@r.Rows?.ToString("N0")</td>
+                <td class="small mono text-truncate" style="max-width:420px">@(r.Detail?.Split('\n')[0])</td>
+                <td class="small">@(r.TriggeredBy ?? "schedule")</td>
+            </tr>
+            @if (expanded == r.Kind + r.RunId && (r.ErrorMessage is not null || r.Detail?.Contains('\n') == true))
+            {
+                <tr><td colspan="9">
+                    @if (r.Detail is not null) { <pre class="err mono mb-2">@r.Detail</pre> }
+                    @if (r.ErrorMessage is not null) { <pre class="err mono text-danger mb-0">@r.ErrorMessage</pre> }
+                </td></tr>
+            }
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<RunRow> rows = [];
+    private string kind = "", status = "";
+    private string? expanded;
+    protected override Task OnInitializedAsync() => LoadAsync();
+    private async Task LoadAsync() =>
+        rows = await Repo.GetRunsAsync(string.IsNullOrEmpty(kind) ? null : kind, null, string.IsNullOrEmpty(status) ? null : status);
+}

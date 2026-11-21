@@ -1,0 +1,668 @@
+@page "/extract/new"
+@page "/extract/{Id:int}"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+@inject AccessService Access
+@inject CatalogService Catalog
+@inject JobRegistrar Registrar
+@inject NavigationManager Nav
+@inject SystemSettingsService SettingsService
+
+<PageTitle>@(IsNew ? "New extract job" : job.Name)</PageTitle>
+
+<div class="d-flex align-items-center mb-3">
+    <h1 class="h4 mb-0 me-auto">@(IsNew ? "New extract job" : $"Extract job: {job.Name}")</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="/extract">← List</a>
+</div>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2 err">@error</div> }
+@if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2">@info</div> }
+@if (loaded && !canEdit) { <div class="alert alert-secondary py-2 small">Read-only: you are not allowed to edit this job (requires the Editor role and permission on the source and target databases).</div> }
+
+@if (loaded)
+{
+<fieldset disabled="@(!canEdit || busy)">
+<div class="row g-3">
+    <!-- ===================== SOURCE ===================== -->
+    <div class="col-xl-6">
+        <div class="card h-100"><div class="card-body">
+            <div class="section-title mb-2">1 · Source <HelpLink Topic="extract-source" Title="Choosing the source" /></div>
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label small">Source server</label>
+                    <select class="form-select form-select-sm" @bind="job.SourceServerId" @bind:after="SourceServerChanged">
+                        <option value="0">Choose…</option>
+                        @foreach (var s in sourceServers) { <option value="@s.SqlServerId">@s.Name (@s.ServerAddress)</option> }
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small">Source database</label>
+                    <select class="form-select form-select-sm" @bind="job.SourceDatabase" @bind:after="SourceDbChanged">
+                        <option value="">Choose…</option>
+                        @foreach (var d in sourceDbs) { <option value="@d">@d</option> }
+                    </select>
+                </div>
+                <div class="col-12">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <input type="radio" class="btn-check" id="st1" checked="@(job.SourceType == SourceType.Table)" @onchange="() => SetSourceType(SourceType.Table)" />
+                        <label class="btn btn-outline-primary" for="st1">Table / view</label>
+                        <input type="radio" class="btn-check" id="st2" checked="@(job.SourceType == SourceType.Query)" @onchange="() => SetSourceType(SourceType.Query)" />
+                        <label class="btn btn-outline-primary" for="st2">SQL query / procedure</label>
+                    </div>
+                </div>
+            </div>
+
+            @if (job.SourceType == SourceType.Table)
+            {
+                <div class="mt-2">
+                    <div class="d-flex align-items-center mb-1">
+                        <input class="form-control form-control-sm me-2" placeholder="Search tables…" @bind="tableFilter" @bind:event="oninput" />
+                        @if (IsNew) { <span class="small text-muted text-nowrap">@selectedTables.Count selected</span> }
+                    </div>
+                    <div class="table-picker border rounded bg-white">
+                        <table class="table table-sm table-hover mb-0">
+                            <tbody>
+                                @foreach (var t in FilteredTables)
+                                {
+                                    <tr @onclick="() => ToggleTable(t)" style="cursor:pointer" class="@(selectedTables.Contains(t.Key) ? "table-primary" : "")">
+                                        <td style="width:28px"><input class="form-check-input" type="@(IsNew ? "checkbox" : "radio")" checked="@selectedTables.Contains(t.Key)" /></td>
+                                        <td class="mono">@t.Schema.<b>@t.Name</b></td>
+                                        <td class="small text-muted">@t.Type</td>
+                                        <td class="small text-muted text-end">@t.Rows?.ToString("N0")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    @if (IsNew) { <div class="form-text">If you select several tables, one job is created per table (all columns, target table name = source table name).</div> }
+                </div>
+
+                @if (selectedTables.Count == 1 && columns.Count > 0)
+                {
+                    <div class="mt-2">
+                        <div class="d-flex align-items-center">
+                            <span class="small fw-semibold me-auto">Columns (@selectedColumns.Count / @columns.Count)</span>
+                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => SelectAllColumns(true)">all</button>
+                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => SelectAllColumns(false)">none</button>
+                            <div class="form-check form-switch small mb-0"><input class="form-check-input" type="checkbox" id="adv" @bind="advancedColumns" /><label class="form-check-label" for="adv">Advanced</label></div>
+                        </div>
+                        @if (advancedColumns)
+                        {
+                            <textarea class="form-control form-control-sm mono" rows="3" @bind="job.ColumnList" placeholder="Empty = all columns. E.g. Id, Name, CAST(Geo.ToString() AS nvarchar(max)) AS Geo"></textarea>
+                        }
+                        else
+                        {
+                            <div class="border rounded bg-white p-2" style="max-height:180px;overflow:auto">
+                                @foreach (var c in columns)
+                                {
+                                    <div class="form-check form-check-inline mono small">
+                                        <input class="form-check-input" type="checkbox" id="c_@c.Name" checked="@selectedColumns.Contains(c.Name)" @onchange="e => ToggleColumn(c.Name, (bool)e.Value!)" />
+                                        <label class="form-check-label" for="c_@c.Name" title="@c.TypeDeclaration">@c.Name <span class="text-muted">@c.TypeDeclaration</span></label>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="row g-2 mt-1">
+                    <div class="col-md-9">
+                        <label class="form-label small">Filter (without the WHERE keyword, optional)</label>
+                        <input class="form-control form-control-sm mono" @bind="job.FilterClause" placeholder="E.g. Status <> 'D' AND CreatedAt >= '2025-01-01'" />
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <div class="form-check small"><input class="form-check-input" type="checkbox" id="nl" @bind="job.UseNoLock" /><label class="form-check-label" for="nl">WITH (NOLOCK)</label></div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="mt-2">
+                    <label class="form-label small">Query (CTEs, temp tables and <code>EXEC dbo.sp</code> are supported)</label>
+                    <textarea class="form-control form-control-sm mono" rows="9" @bind="job.SourceQuery"
+                              placeholder="SELECT o.OrderId, o.Amount, o.ModifiedAt FROM dbo.Orders o WHERE (@@WatermarkFrom IS NULL OR o.ModifiedAt > @@WatermarkFrom)"></textarea>
+                    <div class="form-text">In Incremental mode use the <code>@@WatermarkFrom</code> parameter in the query; it is NULL on the first run.</div>
+                </div>
+            }
+
+            <div class="mt-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="PreviewAsync" disabled="@(!CanPreview)">Preview (first 50 rows)</button>
+            </div>
+            @if (preview is not null) { <div class="mt-2"><PreviewTable Result="preview" /></div> }
+        </div></div>
+    </div>
+
+    <!-- ===================== TARGET ===================== -->
+    <div class="col-xl-6">
+        <div class="card mb-3"><div class="card-body">
+            <div class="section-title mb-2">2 · Target <HelpLink Topic="extract-target" Title="Target table and schema policy" /></div>
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label small">Target server</label>
+                    <select class="form-select form-select-sm" @bind="job.TargetServerId" @bind:after="TargetServerChanged">
+                        <option value="0">Choose…</option>
+                        @foreach (var s in targetServers) { <option value="@s.SqlServerId">@s.Name (@s.ServerAddress)</option> }
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small">Target database</label>
+                    <select class="form-select form-select-sm" @bind="job.TargetDatabase" @bind:after="TargetDbChanged">
+                        <option value="">Choose…</option>
+                        @foreach (var d in targetDbs) { <option value="@d">@d</option> }
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small">Target schema</label>
+                    <input class="form-control form-control-sm mono" list="schemas" @bind="job.TargetSchema" @bind:after="() => schemaTouched = true" />
+                    <datalist id="schemas">@foreach (var s in targetSchemas) { <option value="@s" /> }</datalist>
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label small">Target table</label>
+                    <input class="form-control form-control-sm mono" @bind="job.TargetTable" disabled="@(MultiTable)" placeholder="@(MultiTable ? "source table name is used" : "")" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small">Schema policy</label>
+                    <select class="form-select form-select-sm" @bind="job.SchemaPolicy">
+                        <option value="@SchemaPolicy.Strict">Strict – create if missing; an existing table must match exactly</option>
+                        <option value="@SchemaPolicy.Evolve">Evolve – add new columns, widen text columns</option>
+                    </select>
+                </div>
+                <div class="col-md-6 d-flex align-items-end">
+                    <div class="form-check small"><input class="form-check-input" type="checkbox" id="pd" @bind="job.PartitionDaily" />
+                        <label class="form-check-label" for="pd">Daily partitioning (when the table is created, _LoadedAt UTC) <HelpLink Topic="partitioning" Title="Daily partitioning" /></label></div>
+                </div>
+            </div>
+            <div class="mt-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="CompareAsync" disabled="@(!CanCompare)">Check target</button>
+            </div>
+            @if (comparison is not null) { <div class="mt-2"><ComparisonView Result="comparison" Policy="job.SchemaPolicy" /></div> }
+        </div></div>
+
+        <div class="card mb-3"><div class="card-body">
+            <div class="section-title mb-2">3 · Load <HelpLink Topic="load-modes" Title="Load modes" /></div>
+            <div class="row g-2">
+                <div class="col-md-5">
+                    <label class="form-label small">Load mode</label>
+                    <select class="form-select form-select-sm" @bind="job.LoadMode">
+                        <option value="@LoadMode.Append">Append – add rows on every run (snapshot history)</option>
+                        <option value="@LoadMode.Replace">Replace – keep only the latest successful load</option>
+                        <option value="@LoadMode.Incremental">Incremental – only new rows by a watermark column</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    @if (job.LoadMode == LoadMode.Incremental)
+                    {
+                        <label class="form-label small">Watermark column</label>
+                        @if (WatermarkCandidates.Count > 0)
+                        {
+                            <select class="form-select form-select-sm mono" @bind="job.WatermarkColumn">
+                                <option value="">Choose…</option>
+                                @foreach (var c in WatermarkCandidates) { <option value="@c.Name">@c.Name (@c.TypeDeclaration)</option> }
+                            </select>
+                        }
+                        else
+                        {
+                            <input class="form-control form-control-sm mono" @bind="job.WatermarkColumn" placeholder="ModifiedAt / rowversion" />
+                        }
+                    }
+                    @if (job.LoadMode == LoadMode.Replace)
+                    {
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" id="rebuild" @bind="job.ReplaceRebuild" />
+                            <label class="form-check-label small" for="rebuild">Rebuild the table and swap it in <HelpLink Topic="load-modes" Title="Replace: rebuild and swap" /></label>
+                        </div>
+                        @if (job.ReplaceRebuild)
+                        {
+                            <div class="form-text">Each run loads a new table from the current source schema (schema changes are absorbed, the schema policy does not apply)
+                                and swaps it in atomically. Grants on the table itself and indexes added by hand are lost: grant on the schema.</div>
+                        }
+                    }
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Retention (days) <HelpLink Topic="retention" Title="Retention" /></label>
+                    @if (job.LoadMode == LoadMode.Replace)
+                    {
+                        <input class="form-control form-control-sm" value="not applicable" disabled />
+                        <div class="form-text">Replace keeps only the latest successful load; retention does not apply.</div>
+                    }
+                    else
+                    {
+                    <input type="number" min="1" class="form-control form-control-sm" @bind="job.RetentionDays" placeholder="keep forever"
+                           disabled="@(!isAdmin && policy is { EditorsMayChange: false })" />
+                    }
+                    @if (policy is not null && job.LoadMode != LoadMode.Replace)
+                    {
+                        <div class="form-text">Policy: @(policy.MaxDays is { } max ? $"max {max} days" : "no maximum")
+                            · @(policy.AllowKeepForever ? "keep forever allowed" : "keep forever not allowed")
+                            @(!policy.EditorsMayChange ? " · set by Admins" : "")</div>
+                    }
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Batch size</label>
+                    <input type="number" min="100" class="form-control form-control-sm" @bind="job.BatchSize" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Timeout (s)</label>
+                    <input type="number" min="30" class="form-control form-control-sm" @bind="job.CommandTimeoutSec" />
+                </div>
+            </div>
+            @if (!IsNew && job.LoadMode == LoadMode.Incremental)
+            {
+                <div class="small mt-2">Current watermark: <span class="mono">@(state?.WatermarkValue ?? "(none – the first run reads everything)")</span>
+                    @if (canEdit && state?.WatermarkValue is not null) { <button class="btn btn-link btn-sm text-danger p-0 ms-2" @onclick="ResetWatermarkAsync">reset</button> }
+                </div>
+            }
+        </div></div>
+
+        <div class="card"><div class="card-body">
+            <div class="section-title mb-2">4 · Schedule <HelpLink Topic="cron" Title="Scheduling" /></div>
+            <CronEditor @bind-Cron="job.CronExpression" @bind-TimeZoneId="job.TimeZoneId" Disabled="@(!canEdit)" />
+            <div class="row g-2 mt-2">
+                <div class="col-md-8">
+                    <label class="form-label small">@(MultiTable ? "Job name prefix (empty = db_schema_table)" : "Job name")</label>
+                    <input class="form-control form-control-sm" @bind="job.Name" />
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="act" @bind="job.IsActive" /><label class="form-check-label" for="act">Active</label></div>
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label small">Notify (e-mail addresses for failures and recovery, ; separated) <HelpLink Topic="alerts" Title="Alerts" /></label>
+                    <input class="form-control form-control-sm mono" @bind="job.NotifyEmails" placeholder="owner@corp.local" />
+                </div>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+<div class="d-flex gap-2 mt-3 align-items-center">
+    <button class="btn btn-primary" @onclick="() => SaveAsync(false)">Save</button>
+    <button class="btn btn-outline-primary" @onclick="() => SaveAsync(true)">Save and run now</button>
+    @if (!IsNew)
+    {
+        <button class="btn btn-outline-success" @onclick="RunNowAsync">Run now</button>
+        <span class="ms-auto"></span>
+        @if (!confirmDelete) { <button class="btn btn-outline-danger" @onclick="() => confirmDelete = true">Delete</button> }
+        else { <button class="btn btn-danger" @onclick="DeleteAsync">Confirm delete</button> <button class="btn btn-link" @onclick="() => confirmDelete = false">cancel</button> }
+    }
+    @if (busy) { <span class="spinner-border spinner-border-sm ms-2"></span> }
+</div>
+@if (!IsNew) { <div class="small text-muted mt-2">Created by: @job.CreatedBy · Last modified: @job.ModifiedBy, @Ui.Local(job.ModifiedAtUtc) · Hangfire id: <span class="mono">@JobRegistrar.ExtractId(job.ExtractJobId)</span></div> }
+</fieldset>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private ExtractJobDef job = new();
+    private bool IsNew => Id is null;
+    private bool schemaTouched;
+    private RetentionPolicy? policy;
+    private bool isAdmin;
+    private int? originalRetention;
+    private bool loaded, canEdit, busy, confirmDelete, advancedColumns;
+    private string? error, info;
+    private ExtractState? state;
+
+    private List<SqlServerDef> sourceServers = [], targetServers = [];
+    private IReadOnlyList<string> sourceDbs = [], targetDbs = [], targetSchemas = [];
+    private IReadOnlyList<TableInfo> tables = [];
+    private string tableFilter = "";
+    private readonly HashSet<string> selectedTables = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<ColumnInfo> columns = [];
+    private readonly HashSet<string> selectedColumns = new(StringComparer.OrdinalIgnoreCase);
+    private PreviewResult? preview;
+    private TableComparison? comparison;
+
+    private bool MultiTable => IsNew && job.SourceType == SourceType.Table && selectedTables.Count > 1;
+    private IEnumerable<TableInfo> FilteredTables => string.IsNullOrWhiteSpace(tableFilter) ? tables
+        : tables.Where(t => t.Key.Contains(tableFilter, StringComparison.OrdinalIgnoreCase) || selectedTables.Contains(t.Key));
+    private bool CanPreview => job.SourceServerId > 0 && !string.IsNullOrEmpty(job.SourceDatabase)
+        && (job.SourceType == SourceType.Query ? !string.IsNullOrWhiteSpace(job.SourceQuery) : selectedTables.Count >= 1);
+    private bool CanCompare => CanPreview && !MultiTable && job.TargetServerId > 0 && !string.IsNullOrEmpty(job.TargetDatabase) && !string.IsNullOrWhiteSpace(job.TargetTable);
+
+    private static readonly string[] WatermarkTypes = ["datetime", "datetime2", "smalldatetime", "date", "datetimeoffset", "bigint", "int", "smallint", "tinyint", "decimal", "numeric", "binary(8)"];
+    private IReadOnlyList<ColumnInfo> WatermarkCandidates =>
+        (job.SourceType == SourceType.Table ? columns : preview?.Schema ?? [])
+        .Where(c => WatermarkTypes.Any(t => c.TypeDeclaration.StartsWith(t, StringComparison.OrdinalIgnoreCase))).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            sourceServers = (await Access.AllowedServersAsync("Source")).ToList();
+            targetServers = (await Access.AllowedServersAsync("Target")).ToList();
+            policy = await SettingsService.GetRetentionPolicyAsync();
+            isAdmin = await Access.IsAdminAsync();
+
+            if (IsNew)
+            {
+                job.RetentionDays = policy.DefaultDays;
+                canEdit = await Access.CanEditAsync();
+                if (sourceServers.Count == 1) { job.SourceServerId = sourceServers[0].SqlServerId; await SourceServerChanged(); }
+                if (targetServers.Count == 1) { job.TargetServerId = targetServers[0].SqlServerId; await TargetServerChanged(); }
+            }
+            else
+            {
+                job = await Repo.GetExtractJobAsync(Id!.Value) ?? throw new InvalidOperationException("Job not found.");
+                originalRetention = job.RetentionDays;
+                canEdit = await Access.CanEditExtractAsync(job);
+                state = await Repo.GetExtractStateAsync(job.ExtractJobId);
+                await EnsureServerVisible(sourceServers, job.SourceServerId);
+                await EnsureServerVisible(targetServers, job.TargetServerId);
+                await LoadSourceDbsAsync(keepSelection: true);
+                await LoadTargetDbsAsync(keepSelection: true);
+                if (job.SourceType == SourceType.Table && job.SourceTable is not null)
+                {
+                    selectedTables.Add($"{job.SourceSchema ?? "dbo"}.{job.SourceTable}");
+                    await LoadTablesAsync();
+                    await LoadColumnsAsync(job.SourceSchema ?? "dbo", job.SourceTable, applyColumnList: true);
+                }
+            }
+        }
+        catch (Exception ex) { error = ex.Message; }
+        loaded = true;
+    }
+
+    private async Task EnsureServerVisible(List<SqlServerDef> list, int id)
+    {
+        if (id == 0 || list.Any(s => s.SqlServerId == id)) return;
+        var s = await Repo.GetServerAsync(id);
+        if (s is not null) list.Add(s); // display only; permissions are checked again on save
+    }
+
+    // ---------------- source ----------------
+
+    private async Task SourceServerChanged()
+    {
+        job.SourceDatabase = ""; tables = []; selectedTables.Clear(); columns = []; preview = null; comparison = null;
+        await LoadSourceDbsAsync(keepSelection: false);
+    }
+
+    private async Task LoadSourceDbsAsync(bool keepSelection)
+    {
+        sourceDbs = [];
+        if (job.SourceServerId == 0) return;
+        await Safe(async () =>
+        {
+            var all = await Catalog.DatabasesAsync(job.SourceServerId);
+            sourceDbs = await Access.FilterDatabasesAsync(job.SourceServerId, all, "Source");
+            if (keepSelection && !string.IsNullOrEmpty(job.SourceDatabase) && !sourceDbs.Contains(job.SourceDatabase))
+                sourceDbs = sourceDbs.Append(job.SourceDatabase).ToList();
+        });
+    }
+
+    private async Task SourceDbChanged()
+    {
+        selectedTables.Clear(); columns = []; preview = null; comparison = null;
+        // new jobs: one schema per source database by default (ERP -> erp), unless the user typed a schema
+        if (IsNew && !schemaTouched && !string.IsNullOrEmpty(job.SourceDatabase))
+            job.TargetSchema = TargetTableManager.SuggestSchema(job.SourceDatabase);
+        await LoadTablesAsync();
+    }
+
+    private async Task LoadTablesAsync()
+    {
+        tables = [];
+        if (job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) return;
+        await Safe(async () => tables = await Catalog.TablesAsync(job.SourceServerId, job.SourceDatabase));
+    }
+
+    private void SetSourceType(SourceType t)
+    {
+        job.SourceType = t; preview = null; comparison = null;
+    }
+
+    private async Task ToggleTable(TableInfo t)
+    {
+        if (!canEdit) return;
+        preview = null; comparison = null;
+        if (!IsNew) selectedTables.Clear();
+        if (!selectedTables.Remove(t.Key)) selectedTables.Add(t.Key);
+
+        if (selectedTables.Count == 1)
+        {
+            var only = tables.First(x => selectedTables.Contains(x.Key));
+            job.SourceSchema = only.Schema; job.SourceTable = only.Name;
+            if (string.IsNullOrWhiteSpace(job.TargetTable) || IsNew) job.TargetTable = only.Name;
+            if (IsNew) job.Name = $"{job.SourceDatabase}_{only.Schema}_{only.Name}";
+            await LoadColumnsAsync(only.Schema, only.Name, applyColumnList: false);
+        }
+        else
+        {
+            columns = []; job.ColumnList = null;
+            if (selectedTables.Count == 0) { job.SourceTable = null; }
+            if (IsNew && selectedTables.Count > 1) job.Name = "";
+        }
+    }
+
+    private async Task LoadColumnsAsync(string schema, string table, bool applyColumnList)
+    {
+        await Safe(async () =>
+        {
+            columns = await Catalog.ColumnsAsync(job.SourceServerId, job.SourceDatabase, schema, table);
+            selectedColumns.Clear();
+            advancedColumns = false;
+            if (applyColumnList && !string.IsNullOrWhiteSpace(job.ColumnList))
+            {
+                var tokens = job.ColumnList.Split(',').Select(x => x.Trim().Trim('[', ']')).ToList();
+                if (tokens.All(tok => columns.Any(c => c.Name.Equals(tok, StringComparison.OrdinalIgnoreCase))))
+                    foreach (var tok in tokens) selectedColumns.Add(tok);
+                else
+                    advancedColumns = true; // column list contains expressions
+            }
+            else
+            {
+                foreach (var c in columns) selectedColumns.Add(c.Name);
+            }
+        });
+    }
+
+    private void ToggleColumn(string name, bool on)
+    {
+        if (on) selectedColumns.Add(name); else selectedColumns.Remove(name);
+        SyncColumnList();
+    }
+
+    private void SelectAllColumns(bool on)
+    {
+        selectedColumns.Clear();
+        if (on) foreach (var c in columns) selectedColumns.Add(c.Name);
+        SyncColumnList();
+    }
+
+    private void SyncColumnList()
+    {
+        if (advancedColumns) return;
+        job.ColumnList = selectedColumns.Count == columns.Count || selectedColumns.Count == 0
+            ? null
+            : string.Join(", ", columns.Where(c => selectedColumns.Contains(c.Name)).Select(c => SqlIdent.Quote(c.Name)));
+    }
+
+    private async Task PreviewAsync()
+    {
+        error = null; preview = null;
+        await Busy(async () =>
+        {
+            var probe = Clone(job);
+            if (MultiTable) { var first = tables.First(x => selectedTables.Contains(x.Key)); probe.SourceSchema = first.Schema; probe.SourceTable = first.Name; probe.ColumnList = null; }
+            preview = await Catalog.PreviewExtractAsync(probe);
+        });
+    }
+
+    // ---------------- target ----------------
+
+    private async Task TargetServerChanged()
+    {
+        job.TargetDatabase = ""; targetSchemas = []; comparison = null;
+        await LoadTargetDbsAsync(keepSelection: false);
+    }
+
+    private async Task LoadTargetDbsAsync(bool keepSelection)
+    {
+        targetDbs = [];
+        if (job.TargetServerId == 0) return;
+        await Safe(async () =>
+        {
+            var all = await Catalog.DatabasesAsync(job.TargetServerId);
+            targetDbs = await Access.FilterDatabasesAsync(job.TargetServerId, all, "Target");
+            if (keepSelection && !string.IsNullOrEmpty(job.TargetDatabase))
+            {
+                if (!targetDbs.Contains(job.TargetDatabase)) targetDbs = targetDbs.Append(job.TargetDatabase).ToList();
+                targetSchemas = await Catalog.SchemasAsync(job.TargetServerId, job.TargetDatabase);
+            }
+        });
+    }
+
+    private async Task TargetDbChanged()
+    {
+        comparison = null;
+        if (string.IsNullOrEmpty(job.TargetDatabase)) return;
+        await Safe(async () => targetSchemas = await Catalog.SchemasAsync(job.TargetServerId, job.TargetDatabase));
+    }
+
+    private async Task CompareAsync()
+    {
+        error = null; comparison = null;
+        await Busy(async () => comparison = await Catalog.CompareTargetAsync(job));
+    }
+
+    // ---------------- save / run ----------------
+
+    private async Task SaveAsync(bool runNow)
+    {
+        error = null; info = null;
+        await Busy(async () =>
+        {
+            var user = await Access.UserNameAsync();
+            Validate();
+            if (!await Access.CanUseAsync(job.SourceServerId, job.SourceDatabase, "Source"))
+                throw new InvalidOperationException("You are not allowed to use this source database.");
+            if (!await Access.CanUseAsync(job.TargetServerId, job.TargetDatabase, "Target"))
+                throw new InvalidOperationException("You are not allowed to write to this target database.");
+            // retention policy, enforced server-side with the current policy (it may have changed since the page was opened)
+            var currentPolicy = await SettingsService.GetRetentionPolicyAsync();
+            if (job.LoadMode == LoadMode.Replace) job.RetentionDays = null;   // not applicable: only the latest load is kept
+            if (currentPolicy.ValidateJob(job.RetentionDays, originalRetention, IsNew, await Access.IsAdminAsync(), job.LoadMode) is { } retentionError)
+                throw new InvalidOperationException(retentionError);
+
+            if (MultiTable)
+            {
+                var created = new List<string>();
+                foreach (var t in tables.Where(x => selectedTables.Contains(x.Key)))
+                {
+                    var j = Clone(job);
+                    j.ExtractJobId = 0; j.SourceSchema = t.Schema; j.SourceTable = t.Name; j.ColumnList = null;
+                    j.TargetTable = t.Name;
+                    j.Name = string.IsNullOrWhiteSpace(job.Name) ? $"{job.SourceDatabase}_{t.Schema}_{t.Name}" : $"{job.Name.Trim()}_{t.Name}";
+                    await EnsureRebuildTargetIsFreeAsync(j);
+                    await Repo.SaveExtractJobAsync(j, user);
+                    Registrar.Register(j);
+                    if (runNow) Registrar.RunExtractNow(j, user);
+                    created.Add(j.Name);
+                }
+                info = $"{created.Count} job(s) created and scheduled: {string.Join(", ", created)}";
+                Nav.NavigateTo("/extract");
+                return;
+            }
+
+            await EnsureRebuildTargetIsFreeAsync(job);
+            var id = await Repo.SaveExtractJobAsync(job, user);
+            Registrar.Register(job);
+            if (runNow) Registrar.RunExtractNow(job, user);
+            info = runNow ? "Saved and enqueued." : "Saved; the schedule was registered in Hangfire.";
+            if (IsNew) Nav.NavigateTo($"/extract/{id}");
+            else { job = (await Repo.GetExtractJobAsync(id))!; originalRetention = job.RetentionDays; }
+        });
+    }
+
+    /// <summary>Rebuild replaces the whole table: no other job may write to the same target table (checked again at run time).</summary>
+    private async Task EnsureRebuildTargetIsFreeAsync(ExtractJobDef j)
+    {
+        var all = await Repo.GetExtractJobsAsync();
+        bool Same(ExtractJobDef o) => o.ExtractJobId != j.ExtractJobId && o.TargetServerId == j.TargetServerId
+            && o.TargetDatabase.Equals(j.TargetDatabase, StringComparison.OrdinalIgnoreCase)
+            && o.TargetSchema.Equals(j.TargetSchema, StringComparison.OrdinalIgnoreCase)
+            && o.TargetTable.Equals(j.TargetTable, StringComparison.OrdinalIgnoreCase);
+        var others = all.Where(Same).ToList();
+        if (j.ReplaceRebuild && others.Count > 0)
+            throw new InvalidOperationException($"Replace with rebuild needs a target table that only this job writes to; also written by: {string.Join(", ", others.Select(o => o.Name))}.");
+        if (others.FirstOrDefault(o => o.LoadMode == LoadMode.Replace && o.ReplaceRebuild) is { } rebuilder)
+            throw new InvalidOperationException($"Job '{rebuilder.Name}' rebuilds this target table on every run; choose another target table.");
+    }
+
+    private void Validate()
+    {
+        var errs = new List<string>();
+        if (!MultiTable && string.IsNullOrWhiteSpace(job.Name)) errs.Add("Job name is required.");
+        job.NotifyEmails = string.IsNullOrWhiteSpace(job.NotifyEmails) ? null : job.NotifyEmails.Trim();
+        if (SqlDataCollector.Alerts.AlertFormat.InvalidEmails(job.NotifyEmails) is { Count: > 0 } badMails) errs.Add($"Invalid Notify e-mail address(es): {string.Join(", ", badMails)}");
+        if (job.LoadMode != LoadMode.Replace) job.ReplaceRebuild = false;
+        if (job.ReplaceRebuild && job.PartitionDaily) errs.Add("Replace with rebuild cannot be combined with daily partitioning.");
+        if (job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) errs.Add("Choose a source server and database.");
+        if (job.SourceType == SourceType.Table && selectedTables.Count == 0) errs.Add("Select at least one source table.");
+        if (job.SourceType == SourceType.Query && string.IsNullOrWhiteSpace(job.SourceQuery)) errs.Add("The query cannot be empty.");
+        if (job.SourceType == SourceType.Table && !advancedColumns && selectedTables.Count == 1 && selectedColumns.Count == 0) errs.Add("Select at least one column.");
+        if (job.LoadMode == LoadMode.Incremental && string.IsNullOrWhiteSpace(job.WatermarkColumn)) errs.Add("Choose a watermark column for Incremental mode.");
+        if (job.LoadMode == LoadMode.Incremental && MultiTable) errs.Add("Incremental cannot be used with multiple tables (each table has its own watermark column). Choose Append/Replace or create the jobs one by one.");
+        if (job.TargetServerId == 0 || string.IsNullOrEmpty(job.TargetDatabase)) errs.Add("Choose a target server and database.");
+        if (string.IsNullOrWhiteSpace(job.TargetSchema)) errs.Add("Target schema is required.");
+        if (!MultiTable && string.IsNullOrWhiteSpace(job.TargetTable)) errs.Add("Target table name is required.");
+        if (!JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
+        if (job.BatchSize < 100) job.BatchSize = 10000;
+        if (job.CommandTimeoutSec < 30) job.CommandTimeoutSec = 3600;
+        if (job.SourceType == SourceType.Query) { job.SourceTable = null; job.ColumnList = null; job.FilterClause = null; }
+        else job.SourceQuery = null;
+        if (job.LoadMode != LoadMode.Incremental) job.WatermarkColumn = null;
+        if (errs.Count > 0) throw new InvalidOperationException(string.Join("\n", errs));
+    }
+
+    private async Task RunNowAsync()
+    {
+        error = null;
+        await Busy(async () =>
+        {
+            var hfId = Registrar.RunExtractNow(job, await Access.UserNameAsync());
+            info = $"Enqueued (Hangfire job #{hfId}). See Run History for the result.";
+        });
+    }
+
+    private async Task ResetWatermarkAsync()
+    {
+        await Busy(async () =>
+        {
+            await Repo.ResetWatermarkAsync(job.ExtractJobId, await Access.UserNameAsync());
+            state = null;
+            info = "Watermark reset; the next run reads all data again.";
+        });
+    }
+
+    private async Task DeleteAsync()
+    {
+        await Busy(async () =>
+        {
+            await Repo.DeleteExtractJobAsync(job.ExtractJobId, await Access.UserNameAsync());
+            Registrar.RemoveExtract(job.ExtractJobId);
+            Nav.NavigateTo("/extract");
+        });
+    }
+
+    // ---------------- helpers ----------------
+
+    private async Task Busy(Func<Task> action)
+    {
+        busy = true;
+        try { await action(); }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 2627 or 2601) { error = "A job with this name already exists."; }
+        catch (Exception ex) { error = ex.Message; }
+        finally { busy = false; }
+    }
+
+    private async Task Safe(Func<Task> action)
+    {
+        try { await action(); }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private static ExtractJobDef Clone(ExtractJobDef j) =>
+        System.Text.Json.JsonSerializer.Deserialize<ExtractJobDef>(System.Text.Json.JsonSerializer.Serialize(j))!;
+}

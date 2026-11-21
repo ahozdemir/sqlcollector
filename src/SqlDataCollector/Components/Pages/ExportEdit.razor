@@ -1,0 +1,422 @@
+@page "/export/new"
+@page "/export/{Id:int}"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+@inject AccessService Access
+@inject CatalogService Catalog
+@inject JobRegistrar Registrar
+@inject NavigationManager Nav
+@using Microsoft.Data.SqlClient
+@using SqlDataCollector.Export
+
+<PageTitle>@(IsNew ? "New GCS export" : job.Name)</PageTitle>
+
+<div class="d-flex align-items-center mb-3">
+    <h1 class="h4 mb-0 me-auto">@(IsNew ? "New GCS export job" : $"GCS export: {job.Name}")</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="/export">← List</a>
+</div>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2 err">@error</div> }
+@if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2">@info</div> }
+@if (loaded && !canEdit) { <div class="alert alert-secondary py-2 small">Read-only.</div> }
+
+@if (loaded)
+{
+<fieldset disabled="@(!canEdit || busy)">
+<div class="row g-3">
+    <div class="col-xl-6">
+        <div class="card mb-3"><div class="card-body">
+            <div class="section-title mb-2">1 · Source <HelpLink Topic="export-modes" Title="Export modes" /></div>
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label small">Server</label>
+                    <select class="form-select form-select-sm" @bind="job.SourceServerId" @bind:after="ServerChanged">
+                        <option value="0">Choose…</option>
+                        @foreach (var s in servers) { <option value="@s.SqlServerId">@s.Name</option> }
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small">Database</label>
+                    <select class="form-select form-select-sm" @bind="job.SourceDatabase" @bind:after="DbChanged">
+                        <option value="">Choose…</option>
+                        @foreach (var d in dbs) { <option value="@d">@d</option> }
+                    </select>
+                </div>
+                <div class="col-12">
+                    <label class="form-label small">Mode</label>
+                    <select class="form-select form-select-sm" @bind="job.ExportMode" @bind:after="ModeChanged">
+                        <option value="@ExportMode.AllTables">All collected tables – one CSV set per table, only data collected since the last run (nightly)</option>
+                        <option value="@ExportMode.Incremental">Single table, incremental – loads since the last export</option>
+                        <option value="@ExportMode.Full">Single table, full – the whole table every time</option>
+                        <option value="@ExportMode.Query">Custom query – free SQL (@@RunDate, @@RunAtUtc)</option>
+                    </select>
+                </div>
+
+                @if (job.ExportMode == ExportMode.AllTables)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label small">Schema filter (optional)</label>
+                        <input class="form-control form-control-sm mono" @bind="job.SourceSchema" @bind:after="LoadCollectedAsync" placeholder="all schemas" />
+                    </div>
+                    <div class="col-md-6 d-flex align-items-end">
+                        <div class="form-check small"><input class="form-check-input" type="checkbox" id="tc" @bind="job.IncludeTechnicalColumns" /><label class="form-check-label" for="tc">Include technical columns</label></div>
+                    </div>
+                    <div class="col-12">
+                        <div class="small fw-semibold mb-1">Tables that will be exported (@collected.Count)</div>
+                        @if (collected.Count == 0)
+                        {
+                            <div class="small text-muted">No extract job writes to this database@(string.IsNullOrWhiteSpace(job.SourceSchema) ? "" : $" / schema {job.SourceSchema}") yet.</div>
+                        }
+                        else
+                        {
+                            <div class="table-picker border rounded bg-white">
+                                <table class="table table-sm mb-0 mono">
+                                    <thead class="table-light"><tr><th>Table</th><th class="text-end">Last exported LoadId</th><th>Updated</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var t in collected)
+                                        {
+                                            var st = tableStates.FirstOrDefault(x => x.SchemaName.Equals(t.SchemaName, StringComparison.OrdinalIgnoreCase) && x.TableName.Equals(t.TableName, StringComparison.OrdinalIgnoreCase));
+                                            <tr><td>@t.Key</td><td class="text-end">@(st?.LastExportedLoadId.ToString() ?? "–")</td><td class="small">@(st is null ? "never" : Ui.Local(st.UpdatedAtUtc))</td></tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="form-text">New tables are picked up automatically when an extract job starts writing to this database.</div>
+                        }
+                    </div>
+                }
+                else if (job.ExportMode == ExportMode.Query)
+                {
+                    <div class="col-12">
+                        <textarea class="form-control form-control-sm mono" rows="7" @bind="job.SourceQuery"
+                                  placeholder="SELECT * FROM stage.Orders WHERE _LoadedAt >= DATEADD(day,-1,@@RunAtUtc)"></textarea>
+                    </div>
+                }
+                else
+                {
+                    <div class="col-12">
+                        <label class="form-label small">Table</label>
+                        <select class="form-select form-select-sm mono" value="@($"{job.SourceSchema}.{job.SourceTable}")" @onchange="TableChanged">
+                            <option value=".">Choose…</option>
+                            @foreach (var t in tables) { <option value="@t.Key">@t.Key @(t.Rows is null ? "" : $"({t.Rows:N0})")</option> }
+                        </select>
+                        @if (job.ExportMode == ExportMode.Incremental && selectedTableHasNoLoadId)
+                        {
+                            <div class="text-danger small mt-1">This table has no _LoadId column; Incremental mode only works on tables written by extract jobs.</div>
+                        }
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label small">Column list (empty = all except technical columns)</label>
+                        <input class="form-control form-control-sm mono" @bind="job.ColumnList" />
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <div class="form-check small"><input class="form-check-input" type="checkbox" id="tc2" @bind="job.IncludeTechnicalColumns" /><label class="form-check-label" for="tc2">Include technical columns</label></div>
+                    </div>
+                }
+            </div>
+            @if (job.ExportMode != ExportMode.AllTables)
+            {
+                <div class="mt-2"><button class="btn btn-sm btn-outline-primary" @onclick="PreviewAsync">Preview</button></div>
+                @if (preview is not null) { <div class="mt-2"><PreviewTable Result="preview" /></div> }
+            }
+        </div></div>
+    </div>
+
+    <div class="col-xl-6">
+        <div class="card mb-3"><div class="card-body">
+            <div class="section-title mb-2">2 · Google Cloud Storage <HelpLink Topic="gcs" Title="GCS settings" /></div>
+            <div class="row g-2">
+                <div class="col-md-5">
+                    <label class="form-label small">Bucket</label>
+                    <input class="form-control form-control-sm mono" @bind="job.Bucket" placeholder="company-dwh-exports" />
+                </div>
+                <div class="col-md-7">
+                    <label class="form-label small">Object name template</label>
+                    <input class="form-control form-control-sm mono" @bind="job.ObjectNameTemplate" />
+                </div>
+                <div class="col-12 small text-muted">
+                    Tokens: {Name} {Database} {Schema} {Table} {Date} {DateCompact} {Time} {Part}. Example:
+                    <span class="mono">gs://@(job.Bucket)/@ExampleObjectName</span>
+                </div>
+            </div>
+        </div></div>
+
+        <div class="card mb-3"><div class="card-body">
+            <div class="section-title mb-2">3 · CSV format <HelpLink Topic="csv-format" Title="CSV format" /></div>
+            <div class="row g-2">
+                <div class="col-md-3">
+                    <label class="form-label small">Delimiter</label>
+                    <select class="form-select form-select-sm" @bind="job.Delimiter">
+                        <option value=",">, (comma)</option><option value=";">; (semicolon)</option>
+                        <option value="|">| (pipe)</option><option value="&#9;">TAB</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Quoting</label>
+                    <select class="form-select form-select-sm" @bind="job.QuoteMode">
+                        <option value="@QuoteMode.Minimal">When needed</option>
+                        <option value="@QuoteMode.AllText">All text fields</option>
+                        <option value="@QuoteMode.All">All fields</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Line ending</label>
+                    <select class="form-select form-select-sm" @bind="job.LineEnding"><option value="LF">LF</option><option value="CRLF">CRLF</option></select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">NULL value</label>
+                    <input class="form-control form-control-sm mono" @bind="job.NullValue" placeholder="(empty)" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small">Max rows per file</label>
+                    <input type="number" min="1000" class="form-control form-control-sm" @bind="job.MaxRowsPerFile" placeholder="single file" />
+                </div>
+                <div class="col-12 small text-muted">Files are uploaded to GCS as plain CSV unless "gzip uploaded files" is ticked. The local archive on the export Worker (Collector:KeepLocalFiles) is always stored as .csv.gz.</div>
+                <div class="col-md-8 d-flex flex-wrap gap-3 align-items-end small">
+                    <div class="form-check"><input class="form-check-input" type="checkbox" id="gz" @bind="job.Gzip" /><label class="form-check-label" for="gz">gzip uploaded files</label></div>
+                    <div class="form-check"><input class="form-check-input" type="checkbox" id="bom" @bind="job.Utf8Bom" /><label class="form-check-label" for="bom">UTF-8 BOM (Excel)</label></div>
+                    <div class="form-check"><input class="form-check-input" type="checkbox" id="mf" @bind="job.WriteManifest" /><label class="form-check-label" for="mf">manifest.json</label></div>
+                    <div class="form-check"><input class="form-check-input" type="checkbox" id="ue" @bind="job.UploadWhenEmpty" /><label class="form-check-label" for="ue">Upload header-only file when empty</label></div>
+                </div>
+            </div>
+        </div></div>
+
+        <div class="card"><div class="card-body">
+            <div class="section-title mb-2">4 · Schedule <HelpLink Topic="cron" Title="Scheduling" /></div>
+            <CronEditor @bind-Cron="job.CronExpression" @bind-TimeZoneId="job.TimeZoneId" Disabled="@(!canEdit)" />
+            <div class="row g-2 mt-2">
+                <div class="col-md-8"><label class="form-label small">Job name</label><input class="form-control form-control-sm" @bind="job.Name" /></div>
+                <div class="col-md-4 d-flex align-items-end"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="act" @bind="job.IsActive" /><label class="form-check-label" for="act">Active</label></div></div>
+                <div class="col-md-8">
+                    <label class="form-label small">Notify (e-mail addresses for failures and recovery, ; separated) <HelpLink Topic="alerts" Title="Alerts" /></label>
+                    <input class="form-control form-control-sm mono" @bind="job.NotifyEmails" placeholder="owner@corp.local" />
+                </div>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+<div class="d-flex gap-2 mt-3 align-items-center">
+    <button class="btn btn-primary" @onclick="() => SaveAsync(false)">Save</button>
+    <button class="btn btn-outline-primary" @onclick="() => SaveAsync(true)">Save and run now</button>
+    @if (!IsNew)
+    {
+        <button class="btn btn-outline-success" @onclick="RunNowAsync">Run now</button>
+        @if (job.ExportMode is ExportMode.Incremental or ExportMode.AllTables)
+        {
+            <button class="btn btn-outline-warning" @onclick="ResetStateAsync" title="The next run exports everything again">Reset export state</button>
+        }
+        <span class="ms-auto"></span>
+        @if (!confirmDelete) { <button class="btn btn-outline-danger" @onclick="() => confirmDelete = true">Delete</button> }
+        else { <button class="btn btn-danger" @onclick="DeleteAsync">Confirm delete</button> <button class="btn btn-link" @onclick="() => confirmDelete = false">cancel</button> }
+    }
+    @if (busy) { <span class="spinner-border spinner-border-sm ms-2"></span> }
+</div>
+</fieldset>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    [SupplyParameterFromQuery] public int? FromExtract { get; set; }
+
+    private ExportJobDef job = new() { ExportMode = ExportMode.AllTables, SourceSchema = null, ObjectNameTemplate = ObjectNameTemplate.DefaultAllTables, CronExpression = "0 1 * * *" };
+    private bool IsNew => Id is null;
+    private bool loaded, canEdit, busy, confirmDelete, selectedTableHasNoLoadId;
+    private string? error, info;
+    private List<SqlServerDef> servers = [];
+    private IReadOnlyList<string> dbs = [];
+    private IReadOnlyList<TableInfo> tables = [];
+    private IReadOnlyList<CollectedTable> collected = [];
+    private IReadOnlyList<ExportTableState> tableStates = [];
+    private PreviewResult? preview;
+
+    private string ExampleObjectName
+    {
+        get
+        {
+            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZones.Resolve(job.TimeZoneId));
+            var sample = job.ExportMode == ExportMode.AllTables ? collected.FirstOrDefault() : null;
+            var n = ObjectNameTemplate.Render(job.ObjectNameTemplate, string.IsNullOrEmpty(job.Name) ? "job" : job.Name, job.SourceDatabase,
+                sample?.SchemaName ?? job.SourceSchema, sample?.TableName ?? job.SourceTable, local, "0001");
+            return job.Gzip && !n.EndsWith(".gz") ? n + ".gz" : n;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            servers = (await Access.AllowedServersAsync("Any")).ToList();
+            if (IsNew)
+            {
+                canEdit = await Access.CanEditAsync();
+                if (FromExtract is int ex && await Repo.GetExtractJobAsync(ex) is { } src)
+                {
+                    job.ExportMode = ExportMode.Incremental; job.ObjectNameTemplate = ObjectNameTemplate.DefaultSingle;
+                    job.SourceServerId = src.TargetServerId; job.SourceDatabase = src.TargetDatabase;
+                    job.SourceSchema = src.TargetSchema; job.SourceTable = src.TargetTable; job.Name = src.Name + "_gcs";
+                }
+                else if (servers.Count(s => s.IsTarget) == 1) job.SourceServerId = servers.First(s => s.IsTarget).SqlServerId;
+            }
+            else
+            {
+                job = await Repo.GetExportJobAsync(Id!.Value) ?? throw new InvalidOperationException("Job not found.");
+                canEdit = await Access.CanEditExportAsync(job);
+                if (servers.All(s => s.SqlServerId != job.SourceServerId) && await Repo.GetServerAsync(job.SourceServerId) is { } s) servers.Add(s);
+                tableStates = await Repo.GetExportTableStatesAsync(job.ExportJobId);
+            }
+            await LoadDbsAsync();
+            await LoadTablesAsync();
+            await LoadCollectedAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+        loaded = true;
+    }
+
+    private async Task ServerChanged() { job.SourceDatabase = ""; tables = []; collected = []; await LoadDbsAsync(); }
+    private async Task DbChanged() { job.SourceTable = null; await LoadTablesAsync(); await LoadCollectedAsync(); }
+
+    private void ModeChanged()
+    {
+        preview = null;
+        // Switch to the matching default template if the user has not customized it
+        if (job.ExportMode == ExportMode.AllTables && job.ObjectNameTemplate == ObjectNameTemplate.DefaultSingle)
+            job.ObjectNameTemplate = ObjectNameTemplate.DefaultAllTables;
+        else if (job.ExportMode != ExportMode.AllTables && job.ObjectNameTemplate == ObjectNameTemplate.DefaultAllTables)
+            job.ObjectNameTemplate = ObjectNameTemplate.DefaultSingle;
+        if (job.ExportMode == ExportMode.AllTables) { job.SourceTable = null; }
+    }
+
+    private async Task LoadDbsAsync()
+    {
+        dbs = [];
+        if (job.SourceServerId == 0) return;
+        try
+        {
+            dbs = await Access.FilterDatabasesAsync(job.SourceServerId, await Catalog.DatabasesAsync(job.SourceServerId), "Any");
+            if (!string.IsNullOrEmpty(job.SourceDatabase) && !dbs.Contains(job.SourceDatabase)) dbs = dbs.Append(job.SourceDatabase).ToList();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task LoadTablesAsync()
+    {
+        tables = [];
+        if (job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) return;
+        try { tables = (await Catalog.TablesAsync(job.SourceServerId, job.SourceDatabase)).Where(t => t.Type == "Table").ToList(); await CheckLoadIdAsync(); }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task LoadCollectedAsync()
+    {
+        collected = [];
+        if (job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) return;
+        collected = await Repo.GetCollectedTablesAsync(job.SourceServerId, job.SourceDatabase, job.SourceSchema);
+    }
+
+    private async Task TableChanged(ChangeEventArgs e)
+    {
+        var key = e.Value?.ToString() ?? ".";
+        var dot = key.IndexOf('.');
+        job.SourceSchema = dot > 0 ? key[..dot] : null;
+        job.SourceTable = dot > 0 ? key[(dot + 1)..] : null;
+        if (IsNew && string.IsNullOrWhiteSpace(job.Name) && job.SourceTable is not null) job.Name = $"{job.SourceTable}_gcs";
+        await CheckLoadIdAsync();
+    }
+
+    private async Task CheckLoadIdAsync()
+    {
+        selectedTableHasNoLoadId = false;
+        if (job.SourceTable is null || job.SourceSchema is null) return;
+        var cols = await Catalog.ColumnsAsync(job.SourceServerId, job.SourceDatabase, job.SourceSchema, job.SourceTable);
+        selectedTableHasNoLoadId = cols.Count > 0 && !cols.Any(c => c.Name.Equals(SqlIdent.LoadIdColumn, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task PreviewAsync()
+    {
+        error = null; preview = null;
+        await Busy(async () =>
+        {
+            if (job.ExportMode == ExportMode.Query)
+            {
+                var tz = TimeZones.Resolve(job.TimeZoneId);
+                preview = await Catalog.PreviewExportSqlAsync(job.SourceServerId, job.SourceDatabase, job.SourceQuery ?? "",
+                [
+                    new SqlParameter("@RunDate", System.Data.SqlDbType.Date) { Value = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz).Date },
+                    new SqlParameter("@RunAtUtc", System.Data.SqlDbType.DateTime2) { Value = DateTime.UtcNow }
+                ]);
+            }
+            else
+            {
+                var cols = string.IsNullOrWhiteSpace(job.ColumnList) ? "*" : job.ColumnList;
+                preview = await Catalog.PreviewExportSqlAsync(job.SourceServerId, job.SourceDatabase,
+                    $"SELECT TOP (50) {cols} FROM {SqlIdent.Quote(job.SourceSchema ?? "stage", job.SourceTable ?? "")}", null);
+            }
+        });
+    }
+
+    private async Task SaveAsync(bool runNow)
+    {
+        error = null; info = null;
+        await Busy(async () =>
+        {
+            var errs = new List<string>();
+            if (string.IsNullOrWhiteSpace(job.Name)) errs.Add("Job name is required.");
+            job.NotifyEmails = string.IsNullOrWhiteSpace(job.NotifyEmails) ? null : job.NotifyEmails.Trim();
+            if (SqlDataCollector.Alerts.AlertFormat.InvalidEmails(job.NotifyEmails) is { Count: > 0 } badMails) errs.Add($"Invalid Notify e-mail address(es): {string.Join(", ", badMails)}");
+            if (job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) errs.Add("Choose a server and a database.");
+            if (job.ExportMode is ExportMode.Full or ExportMode.Incremental && string.IsNullOrEmpty(job.SourceTable)) errs.Add("Choose a table.");
+            if (job.ExportMode == ExportMode.Query && string.IsNullOrWhiteSpace(job.SourceQuery)) errs.Add("The query cannot be empty.");
+            if (job.ExportMode == ExportMode.Incremental && selectedTableHasNoLoadId) errs.Add("Incremental mode requires a _LoadId column in the table.");
+            if (job.ExportMode == ExportMode.AllTables && !job.ObjectNameTemplate.Contains("{Table}")) errs.Add("In All collected tables mode the object name template must contain {Table}, otherwise files would overwrite each other.");
+            if (string.IsNullOrWhiteSpace(job.Bucket)) errs.Add("Bucket is required.");
+            if (!JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
+            if (errs.Count > 0) throw new InvalidOperationException(string.Join("\n", errs));
+            if (!await Access.CanUseAsync(job.SourceServerId, job.SourceDatabase, "Any")) throw new InvalidOperationException("You are not allowed to use this database.");
+            if (job.ExportMode == ExportMode.Query) { job.SourceTable = null; }
+            else if (job.ExportMode == ExportMode.AllTables) { job.SourceTable = null; job.SourceQuery = null; job.ColumnList = null; if (string.IsNullOrWhiteSpace(job.SourceSchema)) job.SourceSchema = null; }
+            else { job.SourceQuery = null; }
+
+            var user = await Access.UserNameAsync();
+            var id = await Repo.SaveExportJobAsync(job, user);
+            Registrar.Register(job);
+            if (runNow) Registrar.RunExportNow(job, user);
+            info = runNow ? "Saved and enqueued." : "Saved; the schedule was registered in Hangfire.";
+            if (IsNew) Nav.NavigateTo($"/export/{id}");
+        });
+    }
+
+    private async Task RunNowAsync()
+    {
+        await Busy(async () => info = $"Enqueued (Hangfire job #{Registrar.RunExportNow(job, await Access.UserNameAsync())}). See Run History for the result.");
+    }
+
+    private async Task ResetStateAsync()
+    {
+        await Busy(async () =>
+        {
+            await Repo.ResetExportStateAsync(job.ExportJobId, await Access.UserNameAsync());
+            tableStates = [];
+            info = "Export state reset; the next run exports all data again.";
+        });
+    }
+
+    private async Task DeleteAsync()
+    {
+        await Busy(async () =>
+        {
+            await Repo.DeleteExportJobAsync(job.ExportJobId, await Access.UserNameAsync());
+            Registrar.RemoveExport(job.ExportJobId);
+            Nav.NavigateTo("/export");
+        });
+    }
+
+    private async Task Busy(Func<Task> action)
+    {
+        busy = true;
+        try { await action(); }
+        catch (SqlException ex) when (ex.Number is 2627 or 2601) { error = "A job with this name already exists."; }
+        catch (Exception ex) { error = ex.Message; }
+        finally { busy = false; }
+    }
+}

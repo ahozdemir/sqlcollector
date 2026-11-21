@@ -1,0 +1,216 @@
+# =====================================================================================
+# SqlDataCollector – local test environment
+#
+# Default services (no profile) – used when the app runs on the host (dotnet run, LocalTest profile)
+# against the developer's locally installed SQL Server (metadata + embedded Hangfire + DWH):
+#   src-erp   demo source SQL Server 2022  -> localhost,14331  (DB: ERP)
+#   src-crm   demo source SQL Server 2022  -> localhost,14332  (DB: CRM)
+#   src-seed  one-shot: fills ERP and CRM with test data (only if missing, RESEED=1 forces it)
+#   fakegcs   Google Cloud Storage emulator -> http://localhost:4443  (bucket: test-bucket)
+#
+# Profile "full"   : everything in Docker, deployment mode EMBEDDED (one app = Web+Worker)
+# Profile "shared" : everything in Docker, deployment mode SHARED HANGFIRE
+#                    (web + organization host sample + export worker, separate HangfireDB)
+#   docker compose -f docker/compose.yml up -d                     # sources + fakegcs
+#   docker compose -f docker/compose.yml --profile full up -d --build
+#   docker compose -f docker/compose.yml --profile shared up -d --build
+# Dev credentials only. Local admin: admin / Admin!Dev2026
+# =====================================================================================
+name: sqlcollector
+
+x-sql-env: &sql-env
+  ACCEPT_EULA: "Y"
+  MSSQL_PID: Developer
+  MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}
+
+x-sql-health: &sql-health
+  test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q 'SELECT 1' -o /dev/null"]
+  interval: 5s
+  timeout: 5s
+  retries: 40
+  start_period: 15s
+
+x-app-env: &app-env
+  ASPNETCORE_ENVIRONMENT: Docker
+  URLS: http://+:8080          # overrides "Urls" from appsettings.json
+  SqlCredentialOverrides__ERP: "User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}"
+  SqlCredentialOverrides__CRM: "User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}"
+  SqlCredentialOverrides__DWH: "User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}"
+  ConnectionStrings__Metadata: "Server=target-sql;Database=DataCollectorMeta;User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026};TrustServerCertificate=true"
+  LocalAdmin__PasswordHash: "pbkdf2-sha256$$210000$$8fZnvLJhw+4CmgH8AoG41Q==$$SqxhLyhy/XQNROz6zOaGre0B5Tq+vE9dmDdHTn5ctTk="
+  Gcs__Endpoint: http://fakegcs-docker:4443
+  Gcs__Anonymous: "true"
+  Gcs__CredentialsPath: ""
+  Collector__WorkDirectory: /exports
+  Collector__SyncCron: "*/2 * * * *"
+
+services:
+  # ---------------------------------------------------------------- demo sources
+  src-erp:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment: *sql-env
+    ports: ["${ERP_PORT:-14331}:1433"]
+    volumes: [erp-data:/var/opt/mssql]
+    healthcheck: *sql-health
+
+  src-crm:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment: *sql-env
+    ports: ["${CRM_PORT:-14332}:1433"]
+    volumes: [crm-data:/var/opt/mssql]
+    healthcheck: *sql-health
+
+  src-seed:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      src-erp: { condition: service_healthy }
+      src-crm: { condition: service_healthy }
+    environment:
+      P: ${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}
+      RESEED: ${RESEED:-0}
+    volumes: ["./seed:/seed:ro"]
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        S=/opt/mssql-tools18/bin/sqlcmd
+        seed() { # host db file
+          if [ "$$RESEED" = "1" ] || [ "$$($$S -S $$1 -U sa -P "$$P" -C -h -1 -W -Q "SET NOCOUNT ON; SELECT CASE WHEN OBJECT_ID('$$2.dbo.__SeedInfo') IS NULL THEN 0 ELSE 1 END" | tr -d '[:space:]')" != "1" ]; then
+            echo "Seeding $$2 on $$1 ..."; $$S -S $$1 -U sa -P "$$P" -C -b -I -i $$3
+          else echo "$$2 already exists on $$1 (RESEED=1 to recreate)"; fi
+        }
+        seed src-erp ERP /seed/erp.sql
+        seed src-crm CRM /seed/crm.sql
+    restart: "no"
+
+  # ---------------------------------------------------------------- GCS emulator for a host-run app
+  fakegcs:
+    image: fsouza/fake-gcs-server:latest
+    command: ["-scheme", "http", "-port", "4443", "-public-host", "localhost:4443", "-data", "/data", "-filesystem-root", "/storage"]
+    ports: ["${GCS_PORT:-4443}:4443"]
+    volumes: ["./fake-gcs:/data:ro", "gcs-storage:/storage"]
+
+  # ---------------------------------------------------------------- SMTP sink for alert e-mails (UI: http://localhost:8025)
+  mailpit:
+    image: axllent/mailpit:v1.33.0
+    ports: ["${MAILPIT_SMTP_PORT:-1025}:1025", "${MAILPIT_UI_PORT:-8025}:8025"]
+
+  # ================================================================ profiles: full / shared
+  fakegcs-docker:
+    profiles: [full, shared]
+    image: fsouza/fake-gcs-server:latest
+    command: ["-scheme", "http", "-port", "4443", "-public-host", "fakegcs-docker:4443", "-data", "/data"]
+    ports: ["4444:4443"]
+    volumes: ["./fake-gcs:/data:ro"]
+
+  target-sql:
+    profiles: [full, shared]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment: *sql-env
+    ports: ["${TARGET_PORT:-14330}:1433"]
+    volumes: [target-data:/var/opt/mssql]
+    healthcheck: *sql-health
+
+  target-init:                       # databases on the target server
+    profiles: [full, shared]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on: { target-sql: { condition: service_healthy } }
+    environment: { P: "${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}" }
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /opt/mssql-tools18/bin/sqlcmd -S target-sql -U sa -P "$$P" -C -b -Q "
+          IF DB_ID('DataCollectorMeta') IS NULL CREATE DATABASE DataCollectorMeta;
+          IF DB_ID('DWH') IS NULL CREATE DATABASE DWH;
+          IF DB_ID('HangfireDB') IS NULL CREATE DATABASE HangfireDB;"
+        /opt/mssql-tools18/bin/sqlcmd -S target-sql -U sa -P "$$P" -C -b -d DWH -Q "
+          IF DATABASE_PRINCIPAL_ID('sdc_export_reader') IS NULL CREATE USER sdc_export_reader WITHOUT LOGIN;
+          ALTER ROLE db_datareader ADD MEMBER sdc_export_reader;"
+    restart: "no"
+
+  meta-init:                         # etl schema (+ Hangfire schema for "shared") via the app's CLI
+    profiles: [full, shared]
+    build: { context: .., dockerfile: docker/Dockerfile, target: app }
+    image: sqlcollector-app:dev
+    depends_on: { target-init: { condition: service_completed_successfully } }
+    environment: { P: "${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}" }
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        dotnet SqlDataCollector.dll metadata-install "Server=target-sql;Database=DataCollectorMeta;User ID=sa;Password=$$P;TrustServerCertificate=true"
+        dotnet SqlDataCollector.dll hangfire-install "Server=target-sql;Database=HangfireDB;User ID=sa;Password=$$P;TrustServerCertificate=true" hangfire_collector
+    restart: "no"
+
+  meta-seed:                         # servers, sample jobs, nightly export
+    profiles: [full, shared]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      meta-init: { condition: service_completed_successfully }
+      src-seed: { condition: service_completed_successfully }
+    environment: { P: "${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026}" }
+    volumes: ["./seed:/seed:ro"]
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        sed -e 's/__ERP__/src-erp,1433/; s/__CRM__/src-crm,1433/; s/__DWH__/target-sql,1433/; s/__DWHDB__/DWH/g; s/__DWH_TRUST__/1/; s/__ADMIN__//g' /seed/metadata.sql > /tmp/m.sql
+        /opt/mssql-tools18/bin/sqlcmd -S target-sql -U sa -P "$$P" -C -b -I -d DataCollectorMeta -i /tmp/m.sql
+    restart: "no"
+
+  # ---- profile "full": deployment mode EMBEDDED (Web + Worker in one process, Hangfire in the metadata DB)
+  app:
+    profiles: [full]
+    image: sqlcollector-app:dev
+    depends_on: { meta-seed: { condition: service_completed_successfully } }
+    environment:
+      <<: *app-env
+      Collector__Roles: "Web,Worker"
+      ConnectionStrings__Hangfire: ""        # empty = embedded: Hangfire tables in the metadata DB
+      Collector__HangfirePrepareSchema: "true"
+      Collector__KeepLocalFiles: "true"
+    ports: ["${APP_PORT:-8080}:8080"]
+    volumes: ["./data/exports-full:/exports"]
+
+  # ---- profile "shared": deployment mode SHARED HANGFIRE
+  web:
+    profiles: [shared]
+    image: sqlcollector-app:dev
+    depends_on: { meta-seed: { condition: service_completed_successfully } }
+    environment:
+      <<: *app-env
+      Collector__Roles: Web
+      ConnectionStrings__Hangfire: "Server=target-sql;Database=HangfireDB;User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026};TrustServerCertificate=true"
+      Collector__HangfirePrepareSchema: "false"
+    ports: ["${APP_PORT:-8080}:8080"]
+
+  corporate-host:                    # the organization's existing Hangfire host + SqlDataCollector.Core (mode 2b)
+    profiles: [shared]
+    build: { context: .., dockerfile: docker/Dockerfile, target: existing-host }
+    image: sqlcollector-existing-host:dev
+    depends_on: { meta-seed: { condition: service_completed_successfully } }
+    environment:
+      <<: *app-env
+      ConnectionStrings__Hangfire: "Server=target-sql;Database=HangfireDB;User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026};TrustServerCertificate=true"
+      Collector__Roles: Worker
+      Collector__Queues: "sdc_extract,sdc_system"
+      Host__OwnQueues: "default,corporate_reports"
+    volumes: ["./data/exports-shared-central:/exports"]
+
+  worker-export:                     # SqlDataCollector Worker on the "DWH host": exports only (mode 2a)
+    profiles: [shared]
+    image: sqlcollector-app:dev
+    depends_on: { meta-seed: { condition: service_completed_successfully } }
+    environment:
+      <<: *app-env
+      Collector__Roles: Worker
+      Collector__Queues: sdc_export
+      ConnectionStrings__Hangfire: "Server=target-sql;Database=HangfireDB;User ID=sa;Password=${MSSQL_SA_PASSWORD:-Dev_Passw0rd!2026};TrustServerCertificate=true"
+      Collector__HangfirePrepareSchema: "false"
+      Collector__KeepLocalFiles: "true"
+    volumes: ["./data/exports-shared:/exports"]
+
+volumes:
+  erp-data:
+  crm-data:
+  target-data:
+  gcs-storage:

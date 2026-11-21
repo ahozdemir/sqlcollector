@@ -1,0 +1,49 @@
+@page "/extract"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+@inject AccessService Access
+
+<PageTitle>Extract Jobs</PageTitle>
+
+<div class="d-flex align-items-center mb-3">
+    <h1 class="h4 mb-0 me-auto">Extract Jobs <HelpLink Topic="extract" Title="Extract jobs" /></h1>
+    <input class="form-control form-control-sm w-auto me-2" placeholder="Search…" @bind="filter" @bind:event="oninput" />
+    @if (canEdit) { <a class="btn btn-sm btn-primary" href="/extract/new">+ New job</a> }
+</div>
+
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light">
+        <tr><th>Name</th><th>Source</th><th>Target</th><th>Load mode</th><th>Schema</th><th>Schedule</th><th>Retention</th><th>Modified by</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var j in Filtered)
+        {
+            <tr class="@(j.IsActive ? "" : "text-muted")">
+                <td><a href="/extract/@j.ExtractJobId">@j.Name</a> @if (!j.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                <td class="mono">@j.SourceServerName / @j.SourceDatabase / @(j.SourceType == SourceType.Table ? $"{j.SourceSchema}.{j.SourceTable}" : "(query)")</td>
+                <td class="mono">@j.TargetServerName / @j.TargetDatabase / @j.TargetSchema.@j.TargetTable</td>
+                <td>@j.LoadMode @if (j.LoadMode == LoadMode.Incremental) { <span class="text-muted small">(@j.WatermarkColumn)</span> }</td>
+                <td>@j.SchemaPolicy @if (j.PartitionDaily) { <span class="badge bg-info-subtle text-info-emphasis">daily part.</span> }</td>
+                <td class="mono">@j.CronExpression</td>
+                <td>@(j.LoadMode == LoadMode.Replace ? "latest load" : j.RetentionDays is null ? "∞" : $"{j.RetentionDays} days")</td>
+                <td class="small">@j.ModifiedBy<br /><span class="text-muted">@Ui.Local(j.ModifiedAtUtc)</span></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<ExtractJobDef> jobs = [];
+    private string filter = "";
+    private bool canEdit;
+
+    private IEnumerable<ExtractJobDef> Filtered => string.IsNullOrWhiteSpace(filter) ? jobs :
+        jobs.Where(j => $"{j.Name} {j.SourceServerName} {j.SourceDatabase} {j.SourceTable} {j.TargetDatabase} {j.TargetTable}"
+            .Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        jobs = await Repo.GetExtractJobsAsync();
+        canEdit = await Access.CanEditAsync();
+    }
+}

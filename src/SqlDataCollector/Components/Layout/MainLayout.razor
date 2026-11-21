@@ -1,0 +1,45 @@
+@inherits LayoutComponentBase
+@inject IConfiguration Config
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
+    <a class="navbar-brand fw-semibold" href="/">SqlDataCollector</a>
+    <AuthorizeView>
+        <Authorized>
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item"><NavLink class="nav-link" href="/" Match="NavLinkMatch.All">Status</NavLink></li>
+                <li class="nav-item"><NavLink class="nav-link" href="/extract">Extract Jobs</NavLink></li>
+                <li class="nav-item"><NavLink class="nav-link" href="/export">GCS Exports</NavLink></li>
+                <li class="nav-item"><NavLink class="nav-link" href="/runs">Run History</NavLink></li>
+                <AuthorizeView Roles="Admin" Context="adminCtx">
+                    <li class="nav-item"><NavLink class="nav-link" href="/admin/servers">Servers</NavLink></li>
+                    <li class="nav-item"><NavLink class="nav-link" href="/admin/permissions">Permissions</NavLink></li>
+                    <li class="nav-item"><NavLink class="nav-link" href="/admin/alerts">Alerts</NavLink></li>
+                    <li class="nav-item"><NavLink class="nav-link" href="/admin/settings">Settings</NavLink></li>
+                    <li class="nav-item"><NavLink class="nav-link" href="/admin/audit">Audit</NavLink></li>
+                </AuthorizeView>
+                <li class="nav-item"><a class="nav-link" href="@DashboardPath" target="_blank">Hangfire ↗</a></li>
+                <li class="nav-item"><NavLink class="nav-link" href="/help">Help</NavLink></li>
+            </ul>
+            <span class="navbar-text me-3 small">
+                @context.User.Identity?.Name
+                <span class="badge bg-secondary ms-1">@string.Join(", ", context.User.FindAll(ClaimTypes.Role).Select(c => c.Value))</span>
+            </span>
+            <form method="post" action="/auth/logout" class="d-inline">
+                <AntiforgeryToken />
+                <button class="btn btn-sm btn-outline-light" type="submit">Sign out</button>
+            </form>
+        </Authorized>
+    </AuthorizeView>
+</nav>
+
+<main class="container-fluid px-4 py-3">
+    @Body
+</main>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unexpected error has occurred. <a href="." class="reload">Reload</a>
+</div>
+
+@code {
+    private string DashboardPath => Config["Dashboard:Path"] ?? "/hangfire";
+}

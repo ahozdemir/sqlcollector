@@ -1,0 +1,40 @@
+@if (Result is not null)
+{
+    var cls = !Result.Exists ? "alert-info" : Result.IsIdentical ? "alert-success" : "alert-warning";
+    <div class="alert @cls py-2 mb-2">
+        <div class="fw-semibold">@Result.Summary()</div>
+        @if (Result.Exists)
+        {
+            <div class="small">Partitioning: @(Result.IsPartitioned ? "daily (_LoadedAt)" : "none") · Technical columns: @(Result.HasTechnicalColumns ? "present" : "missing")</div>
+            @if (!Result.IsIdentical && Policy == SchemaPolicy.Strict)
+            {
+                <div class="small mt-1">With the Strict policy the job <b>will fail</b>. Fix the target, choose another table name or use the Evolve policy.</div>
+            }
+            @if (!Result.IsIdentical && Policy == SchemaPolicy.Evolve)
+            {
+                <div class="small mt-1">Evolve: missing columns are added and narrow text columns widened. Type mismatches may still fail.</div>
+            }
+        }
+    </div>
+    @if (Result.Diffs.Count > 0)
+    {
+        <table class="table table-sm table-bordered bg-white mono">
+            <thead class="table-light"><tr><th>Column</th><th>Status</th><th>Source</th><th>Target</th></tr></thead>
+            <tbody>
+                @foreach (var d in Result.Diffs)
+                {
+                    <tr>
+                        <td>@d.Column</td>
+                        <td>@(d.Kind switch { "Missing" => "Missing in target", "Extra" => "Only in target", "Widen" => "Target too narrow", _ => "Type mismatch" })</td>
+                        <td>@d.SourceType</td>
+                        <td>@d.TargetType</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+@code {
+    [Parameter] public TableComparison? Result { get; set; }
+    [Parameter] public SchemaPolicy Policy { get; set; }
+}

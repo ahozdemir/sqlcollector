@@ -1,0 +1,55 @@
+@page "/login"
+@layout EmptyLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@using Microsoft.Extensions.Options
+@inject IOptions<LocalAdminOptions> LocalAdmin
+
+<PageTitle>Sign in – SqlDataCollector</PageTitle>
+
+<div class="row justify-content-center">
+    <div class="col-md-5 col-lg-4">
+        <h1 class="h3 mb-4 text-center">SqlDataCollector</h1>
+
+        @if (!string.IsNullOrEmpty(Error)) { <div class="alert alert-danger">@ErrorText</div> }
+        @if (LoggedOut is not null) { <div class="alert alert-info">You have been signed out.</div> }
+
+        <div class="card mb-3">
+            <div class="card-body text-center">
+                <p class="text-muted small mb-3">Sign in with your corporate (Active Directory) account.</p>
+                <a class="btn btn-primary w-100" href="/auth/windows?returnUrl=@Uri.EscapeDataString(ReturnUrl ?? "/")">Sign in with Windows (AD)</a>
+            </div>
+        </div>
+
+        @if (LocalAdmin.Value.Enabled && !string.IsNullOrWhiteSpace(LocalAdmin.Value.PasswordHash))
+        {
+            <details class="card">
+                <summary class="card-header small">Local administrator</summary>
+                <div class="card-body">
+                    <form method="post" action="/auth/local">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+                        <div class="mb-2"><input class="form-control" name="username" placeholder="User name" autocomplete="username" required /></div>
+                        <div class="mb-3"><input class="form-control" name="password" type="password" placeholder="Password" autocomplete="current-password" required /></div>
+                        <button class="btn btn-outline-secondary w-100" type="submit">Sign in</button>
+                    </form>
+                </div>
+            </details>
+        }
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+    [SupplyParameterFromQuery] public string? Error { get; set; }
+    [SupplyParameterFromQuery] public string? LoggedOut { get; set; }
+
+    private string ErrorText => Error switch
+    {
+        "invalid" => "Invalid user name or password.",
+        "locked" => "Too many failed attempts. Try again in 15 minutes.",
+        "disabled" => "Local administrator sign-in is disabled.",
+        "expired" => "The form expired, please try again.",
+        _ => "Sign-in failed."
+    };
+}

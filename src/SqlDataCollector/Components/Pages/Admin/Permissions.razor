@@ -1,0 +1,136 @@
+@page "/admin/permissions"
+@attribute [Authorize(Policy = AppRoles.Admin)]
+@inject MetadataRepository Repo
+@inject AccessService Access
+@inject CatalogService Catalog
+
+<PageTitle>Permissions</PageTitle>
+<h1 class="h4 mb-3">Roles and server/database permissions <HelpLink Topic="roles" Title="Roles and permissions" /></h1>
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2">@error</div> }
+
+<div class="row g-3">
+    <div class="col-xl-5">
+        <div class="card"><div class="card-body">
+            <div class="section-title mb-2">Roles</div>
+            <p class="small text-muted mb-2">
+                <b>Admin</b>: everything + full Hangfire access · <b>Editor</b>: defines and runs jobs on permitted servers/databases · <b>Viewer</b>: read-only.
+                Principal: <span class="mono">DOMAIN\user</span> or <span class="mono">DOMAIN\group</span>. Changes apply to open sessions within 10 minutes.
+            </p>
+            <table class="table table-sm mb-2">
+                <thead><tr><th>Principal</th><th>Type</th><th>Role</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var r in roles)
+                    {
+                        <tr><td class="mono">@r.PrincipalName</td><td>@(r.PrincipalType == "G" ? "Group" : "User")</td><td>@r.Role</td>
+                            <td><button class="btn btn-sm btn-link text-danger p-0" @onclick="() => DeleteRoleAsync(r)">remove</button></td></tr>
+                    }
+                </tbody>
+            </table>
+            <div class="row g-1">
+                <div class="col-6"><input class="form-control form-control-sm mono" placeholder="DOMAIN\group" @bind="newRole.PrincipalName" /></div>
+                <div class="col-2"><select class="form-select form-select-sm" @bind="newRole.PrincipalType"><option value="G">Group</option><option value="U">User</option></select></div>
+                <div class="col-2"><select class="form-select form-select-sm" @bind="newRole.Role">@foreach (var r in AppRoles.All) { <option>@r</option> }</select></div>
+                <div class="col-2"><button class="btn btn-sm btn-primary w-100" @onclick="AddRoleAsync">Add</button></div>
+            </div>
+        </div></div>
+    </div>
+
+    <div class="col-xl-7">
+        <div class="card"><div class="card-body">
+            <div class="section-title mb-2">Server / database permissions (for Editor and Viewer)</div>
+            <p class="small text-muted mb-2">Users only see and can select permitted servers and databases. Empty database = all databases on that server. Not needed for Admins.</p>
+            <table class="table table-sm mb-2">
+                <thead><tr><th>Principal</th><th>Server</th><th>Database</th><th>Source</th><th>Target</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var p in perms)
+                    {
+                        <tr><td class="mono">@p.PrincipalName</td><td>@p.ServerName</td><td class="mono">@(p.DatabaseName ?? "(all)")</td>
+                            <td>@(p.CanSource ? "✓" : "")</td><td>@(p.CanTarget ? "✓" : "")</td>
+                            <td><button class="btn btn-sm btn-link text-danger p-0" @onclick="() => DeletePermAsync(p)">remove</button></td></tr>
+                    }
+                </tbody>
+            </table>
+            <div class="row g-1 align-items-center">
+                <div class="col-md-3"><input class="form-control form-control-sm mono" placeholder="DOMAIN\group" @bind="newPerm.PrincipalName" /></div>
+                <div class="col-md-3">
+                    <select class="form-select form-select-sm" @bind="newPerm.SqlServerId" @bind:after="PermServerChanged">
+                        <option value="0">Server…</option>
+                        @foreach (var s in servers) { <option value="@s.SqlServerId">@s.Name</option> }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select form-select-sm" @bind="newPerm.DatabaseName">
+                        <option value="">(all)</option>
+                        @foreach (var d in permDbs) { <option value="@d">@d</option> }
+                    </select>
+                </div>
+                <div class="col-md-2 small">
+                    <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="pcs" @bind="newPerm.CanSource" /><label class="form-check-label" for="pcs">Source</label></div>
+                    <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="pct" @bind="newPerm.CanTarget" /><label class="form-check-label" for="pct">Target</label></div>
+                </div>
+                <div class="col-md-1"><button class="btn btn-sm btn-primary w-100" @onclick="AddPermAsync">Add</button></div>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<RoleAssignmentDef> roles = [];
+    private IReadOnlyList<ServerPermissionDef> perms = [];
+    private IReadOnlyList<SqlServerDef> servers = [];
+    private IReadOnlyList<string> permDbs = [];
+    private RoleAssignmentDef newRole = new();
+    private ServerPermissionDef newPerm = new();
+    private string? error;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        roles = await Repo.GetRoleAssignmentsAsync();
+        perms = await Repo.GetServerPermissionsAsync();
+        servers = await Repo.GetServersAsync();
+    }
+
+    private async Task PermServerChanged()
+    {
+        permDbs = [];
+        newPerm.DatabaseName = null;
+        if (newPerm.SqlServerId == 0) return;
+        try { permDbs = await Catalog.DatabasesAsync(newPerm.SqlServerId); } catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task AddRoleAsync()
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(newRole.PrincipalName)) { error = "Principal name is required."; return; }
+        newRole.PrincipalName = newRole.PrincipalName.Trim();
+        await Repo.SaveRoleAssignmentAsync(newRole, await Access.UserNameAsync());
+        newRole = new();
+        await LoadAsync();
+    }
+
+    private async Task DeleteRoleAsync(RoleAssignmentDef r)
+    {
+        await Repo.DeleteRoleAssignmentAsync(r.RoleAssignmentId, await Access.UserNameAsync());
+        await LoadAsync();
+    }
+
+    private async Task AddPermAsync()
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(newPerm.PrincipalName) || newPerm.SqlServerId == 0) { error = "Principal and server are required."; return; }
+        if (!newPerm.CanSource && !newPerm.CanTarget) { error = "Select at least one of Source or Target."; return; }
+        newPerm.PrincipalName = newPerm.PrincipalName.Trim();
+        await Repo.SaveServerPermissionAsync(newPerm, await Access.UserNameAsync());
+        newPerm = new();
+        permDbs = [];
+        await LoadAsync();
+    }
+
+    private async Task DeletePermAsync(ServerPermissionDef p)
+    {
+        await Repo.DeleteServerPermissionAsync(p.ServerPermissionId, await Access.UserNameAsync());
+        await LoadAsync();
+    }
+}

@@ -1,0 +1,60 @@
+<div class="row g-2 align-items-end">
+    <div class="col-md-4">
+        <label class="form-label small">Preset</label>
+        <select class="form-select form-select-sm" value="" @onchange="PresetChanged" disabled="@Disabled">
+            <option value="">Choose…</option>
+            @foreach (var p in Ui.CronPresets) { <option value="@p.Cron">@p.Label (@p.Cron)</option> }
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label small">Cron expression <HelpLink Topic="cron" Title="Cron syntax" /></label>
+        <input class="form-control form-control-sm mono" value="@Cron" @onchange="CronInput" disabled="@Disabled" />
+    </div>
+    <div class="col-md-4">
+        <label class="form-label small">Time zone</label>
+        <select class="form-select form-select-sm" value="@TimeZoneId" @onchange="TzChanged" disabled="@Disabled">
+            @foreach (var tz in Ui.TimeZoneChoices.Union([TimeZoneId])) { <option value="@tz">@tz</option> }
+        </select>
+    </div>
+</div>
+@{
+    var (ok, err, next) = JobRegistrar.Preview(Cron, TimeZoneId);
+}
+@if (!ok)
+{
+    <div class="text-danger small mt-1">Invalid cron expression: @err</div>
+}
+else
+{
+    <div class="small text-muted mt-1">Next runs:
+        @foreach (var n in next) { <span class="badge bg-light text-dark border me-1 mono">@TimeZoneInfo.ConvertTime(n, TimeZones.Resolve(TimeZoneId)).ToString("ddd dd MMM HH:mm", Ui.Culture)</span> }
+    </div>
+}
+
+@code {
+    [Parameter] public string Cron { get; set; } = "";
+    [Parameter] public EventCallback<string> CronChanged { get; set; }
+    [Parameter] public string TimeZoneId { get; set; } = "Europe/Istanbul";
+    [Parameter] public EventCallback<string> TimeZoneIdChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private async Task PresetChanged(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString();
+        if (string.IsNullOrEmpty(v)) return;
+        Cron = v;
+        await CronChanged.InvokeAsync(v);
+    }
+
+    private async Task CronInput(ChangeEventArgs e)
+    {
+        Cron = e.Value?.ToString()?.Trim() ?? "";
+        await CronChanged.InvokeAsync(Cron);
+    }
+
+    private async Task TzChanged(ChangeEventArgs e)
+    {
+        TimeZoneId = e.Value?.ToString() ?? "UTC";
+        await TimeZoneIdChanged.InvokeAsync(TimeZoneId);
+    }
+}

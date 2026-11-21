@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/TestResults/
+.git/
+.vs/
+.claude/
+.local/
+docker/data/
+tests/e2e/
+**/appsettings.LocalTest.json
+*.zip

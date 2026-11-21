@@ -1,0 +1,239 @@
+@page "/admin/alerts"
+@attribute [Authorize(Policy = AppRoles.Admin)]
+@using Microsoft.Extensions.Options
+@using SqlDataCollector.Alerts
+@inject MetadataRepository Repo
+@inject SystemSettingsService SettingsService
+@inject AlertSender Sender
+@inject AccessService Access
+@inject IOptions<AlertOptions> AlertOpts
+
+<PageTitle>Alerts</PageTitle>
+
+<h1 class="h4 mb-2">Alerts <HelpLink Topic="alerts" Title="Job failure alerts" /></h1>
+<p class="small text-muted">Failed, partially failed, abandoned or missed runs and queues without a Hangfire server are reported to the channels below
+    (and to the e-mail addresses in a job's <i>Notify</i> field). Checked every minute by the Web process.</p>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2">@error</div> }
+@if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2">@info</div> }
+
+<div class="card mb-3"><div class="card-body">
+    <div class="row g-3 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label small">Repeat the same problem at most every (minutes)</label>
+            <input type="number" min="1" class="form-control form-control-sm" @bind="throttle" />
+        </div>
+        <div class="col-md-3">
+            <label class="form-label small">A scheduled run is missed after (minutes)</label>
+            <input type="number" min="1" class="form-control form-control-sm" @bind="grace" />
+        </div>
+        <div class="col-md-2"><button class="btn btn-sm btn-primary" @onclick="SaveSettingsAsync">Save</button></div>
+        <div class="col-md-4 small">
+            SMTP: @if (string.IsNullOrWhiteSpace(AlertOpts.Value.Smtp.Host)) { <span class="text-danger">not configured (Alerts:Smtp:Host)</span> }
+                  else { <span class="mono">@AlertOpts.Value.Smtp.Host:@AlertOpts.Value.Smtp.Port</span> <span class="text-muted">from @AlertOpts.Value.Smtp.From</span> }
+            <br />Links: @if (string.IsNullOrWhiteSpace(AlertOpts.Value.PublicUrl)) { <span class="text-muted">none (Alerts:PublicUrl)</span> } else { <span class="mono">@AlertOpts.Value.PublicUrl</span> }
+        </div>
+    </div>
+</div></div>
+
+<div class="d-flex align-items-center mb-1">
+    <div class="section-title me-auto">Channels</div>
+    <button class="btn btn-sm btn-primary" @onclick="New">+ New channel</button>
+</div>
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light"><tr><th>Name</th><th>Type</th><th>Destination</th><th>Events</th><th>Jobs</th><th>State</th><th>Test</th><th></th></tr></thead>
+    <tbody>
+        @if (channels.Count == 0) { <tr><td colspan="8" class="text-muted small">No channel yet – alerts only go to jobs' Notify addresses.</td></tr> }
+        @foreach (var c in channels)
+        {
+            <tr class="@(c.IsActive ? "" : "text-muted")">
+                <td>@c.Name</td>
+                <td>@c.ChannelType</td>
+                <td class="mono small">@AlertFormat.MaskTarget(c.ChannelType, c.Target)</td>
+                <td class="small">@c.Statuses.Replace(",", ", ")</td>
+                <td class="small">@c.JobKinds.Replace(",", ", ")@(string.IsNullOrWhiteSpace(c.JobNameFilter) ? "" : $" · {c.JobNameFilter}")</td>
+                <td>@(c.IsActive ? "Active" : "Inactive")</td>
+                <td class="small" style="max-width:300px">@if (tests.TryGetValue(c.AlertChannelId, out var t)) { <span class="@(t.Ok ? "text-success" : "text-danger")">@t.Message</span> }</td>
+                <td class="text-nowrap">
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => TestAsync(c)">Send test</button>
+                    <button class="btn btn-sm btn-outline-primary" @onclick="() => Edit(c)">Edit</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (editing is not null)
+{
+    <div class="card mb-3"><div class="card-body">
+        <div class="section-title mb-2">@(editing.AlertChannelId == 0 ? "New channel" : $"Edit: {editing.Name}")</div>
+        <div class="row g-2">
+            <div class="col-md-3"><label class="form-label small">Name</label><input class="form-control form-control-sm" @bind="editing.Name" /></div>
+            <div class="col-md-2"><label class="form-label small">Type</label>
+                <select class="form-select form-select-sm" @bind="editing.ChannelType">
+                    <option value="Email">E-mail</option><option value="Teams">Microsoft Teams</option><option value="Webhook">Webhook (JSON)</option>
+                </select></div>
+            <div class="col-md-7">
+                @if (editing.ChannelType == AlertChannelTypes.Email)
+                {
+                    <label class="form-label small">Recipients (separated by ; or ,)</label>
+                    <input class="form-control form-control-sm mono" @bind="editing.Target" placeholder="dba-team@corp.local; etl@corp.local" />
+                }
+                else
+                {
+                    <label class="form-label small">Webhook URL @(editing.AlertChannelId != 0 && keepUrl ? $"(current: {AlertFormat.MaskTarget(editing.ChannelType, originalTarget)} – leave empty to keep)" : "")</label>
+                    <input class="form-control form-control-sm mono" @bind="newUrl" placeholder="@(editing.ChannelType == AlertChannelTypes.Teams ? "https://…logic.azure.com/workflows/…" : "https://hooks.example.com/…")" />
+                    <div class="form-text">The URL is a secret: it is shown masked and audited masked. Teams: a Workflows "post to a channel when a webhook request is received" URL.</div>
+                }
+            </div>
+            <div class="col-md-8 small">
+                <span class="text-muted me-2">Events:</span>
+                @foreach (var ev in AlertEvents.All)
+                {
+                    var id = "ev_" + ev;
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="@id" checked="@HasStatus(ev)" @onchange="e => ToggleStatus(ev, (bool)e.Value!)" />
+                        <label class="form-check-label" for="@id">@ev</label>
+                    </div>
+                }
+            </div>
+            <div class="col-md-4 small">
+                <span class="text-muted me-2">Jobs:</span>
+                @foreach (var k in new[] { "Extract", "Export" })
+                {
+                    var id = "jk_" + k;
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="@id" checked="@HasKind(k)" @onchange="e => ToggleKind(k, (bool)e.Value!)" />
+                        <label class="form-check-label" for="@id">@k</label>
+                    </div>
+                }
+            </div>
+            <div class="col-md-4"><label class="form-label small">Job name filter (optional, wildcards: erp_*; crm_*)</label>
+                <input class="form-control form-control-sm mono" @bind="editing.JobNameFilter" /></div>
+            <div class="col-md-2 d-flex align-items-end"><div class="form-check"><input class="form-check-input" type="checkbox" id="chAct" @bind="editing.IsActive" /><label class="form-check-label small" for="chAct">Active</label></div></div>
+        </div>
+        <div class="mt-3 d-flex gap-2">
+            <button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save</button>
+            <button class="btn btn-sm btn-link" @onclick="() => editing = null">Cancel</button>
+            @if (editing.AlertChannelId != 0) { <button class="btn btn-sm btn-outline-danger ms-auto" @onclick="DeleteAsync">Delete</button> }
+        </div>
+    </div></div>
+}
+
+<div class="section-title mt-4 mb-1">Recent deliveries</div>
+<table class="table table-sm small bg-white">
+    <thead class="table-light"><tr><th>Created</th><th>Event</th><th>Job</th><th>Destination</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
+    <tbody>
+        @if (deliveries.Count == 0) { <tr><td colspan="7" class="text-muted">Nothing sent yet.</td></tr> }
+        @foreach (var d in deliveries)
+        {
+            <tr>
+                <td>@Ui.Local(d.CreatedAtUtc)</td>
+                <td>@d.EventType</td>
+                <td>@d.JobName <span class="text-muted">(@d.JobKind)</span></td>
+                <td>@d.Destination</td>
+                <td><span class="badge @(d.Status switch { "Sent" => "bg-success", "Suppressed" => "bg-secondary", _ => "bg-danger" })">@d.Status</span></td>
+                <td>@d.Attempts</td>
+                <td style="max-width:420px">@Ui.ShortError(d.LastError)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<AlertChannelDef> channels = [];
+    private IReadOnlyList<AlertLogRow> deliveries = [];
+    private AlertChannelDef? editing;
+    private string originalTarget = "";
+    private string? newUrl;
+    private bool keepUrl;
+    private readonly Dictionary<int, ConnectionTestResult> tests = new();
+    private int throttle, grace;
+    private string? error, info;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var s = await SettingsService.GetAlertSettingsAsync();
+        (throttle, grace) = (s.ThrottleMinutes, s.MissedGraceMinutes);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        channels = await Repo.GetAlertChannelsAsync();
+        deliveries = await Repo.GetRecentAlertLogAsync();
+    }
+
+    private void New() { editing = new AlertChannelDef(); originalTarget = ""; newUrl = null; keepUrl = false; }
+
+    private void Edit(AlertChannelDef c)
+    {
+        editing = new AlertChannelDef
+        {
+            AlertChannelId = c.AlertChannelId, Name = c.Name, ChannelType = c.ChannelType, Target = c.ChannelType == AlertChannelTypes.Email ? c.Target : "",
+            Statuses = c.Statuses, JobKinds = c.JobKinds, JobNameFilter = c.JobNameFilter, IsActive = c.IsActive
+        };
+        originalTarget = c.Target;
+        keepUrl = c.ChannelType != AlertChannelTypes.Email;
+        newUrl = null;
+    }
+
+    private bool HasStatus(string s) => AlertFormat.SplitList(editing!.Statuses).Contains(s);
+    private void ToggleStatus(string s, bool on) => editing!.Statuses = Toggle(editing.Statuses, s, on, AlertEvents.All);
+    private bool HasKind(string k) => AlertFormat.SplitList(editing!.JobKinds).Contains(k);
+    private void ToggleKind(string k, bool on) => editing!.JobKinds = Toggle(editing.JobKinds, k, on, ["Extract", "Export"]);
+
+    private static string Toggle(string list, string item, bool on, IEnumerable<string> order)
+    {
+        var set = AlertFormat.SplitList(list).ToHashSet();
+        if (on) set.Add(item); else set.Remove(item);
+        return string.Join(",", order.Where(set.Contains));
+    }
+
+    private async Task SaveAsync()
+    {
+        error = null; info = null;
+        try
+        {
+            var ch = editing!;
+            if (ch.ChannelType != AlertChannelTypes.Email)
+                ch.Target = !string.IsNullOrWhiteSpace(newUrl) ? newUrl.Trim() : keepUrl ? originalTarget : "";
+            ch.JobNameFilter = string.IsNullOrWhiteSpace(ch.JobNameFilter) ? null : ch.JobNameFilter.Trim();
+            if (AlertFormat.ValidateChannel(ch) is { } err) throw new InvalidOperationException(err);
+            await Repo.SaveAlertChannelAsync(ch, await Access.UserNameAsync());
+            editing = null;
+            info = "Channel saved.";
+            await LoadAsync();
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 2627 or 2601) { error = "A channel with this name already exists."; }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        error = null;
+        try { await Repo.DeleteAlertChannelAsync(editing!.AlertChannelId, await Access.UserNameAsync()); editing = null; await LoadAsync(); }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task TestAsync(AlertChannelDef c)
+    {
+        try
+        {
+            await Sender.SendAsync(c, AlertSender.TestEvent(await Access.UserNameAsync()), CancellationToken.None);
+            tests[c.AlertChannelId] = new ConnectionTestResult(true, "Test alert sent.");
+        }
+        catch (Exception ex) { tests[c.AlertChannelId] = new ConnectionTestResult(false, ex.Message); }
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        error = null; info = null;
+        try
+        {
+            await SettingsService.SaveAlertSettingsAsync(new AlertSettings(throttle, grace), await Access.UserNameAsync());
+            info = "Alert settings saved.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+}

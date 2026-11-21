@@ -1,0 +1,69 @@
+@page "/"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+@inject Hangfire.JobStorage Storage
+
+<PageTitle>Status – SqlDataCollector</PageTitle>
+
+<div class="d-flex align-items-center mb-3">
+    <h1 class="h4 mb-0 me-auto">Status</h1>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync">Refresh</button>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="section-title mb-1">Hangfire worker servers <HelpLink Topic="architecture" Title="Web and Worker roles" /></div>
+        @if (servers.Count == 0)
+        {
+            <div class="text-danger small">No active worker! Jobs stay in the queue. Check that a Worker (<code>Collector:Roles = Worker</code>) or the shared Hangfire host is running and listens to the <code>sdc_*</code> queues.</div>
+        }
+        else
+        {
+            @foreach (var s in servers)
+            {
+                <span class="badge bg-success-subtle text-success-emphasis border me-2">@s.Name · @s.WorkersCount workers · queues: @string.Join(",", s.Queues) · last heartbeat @Ui.Local(s.Heartbeat)</span>
+            }
+        }
+        <div class="small text-muted mt-1">Enqueued: @enqueued · Processing: @processing · Failed (last 24 h): @failed</div>
+    </div>
+</div>
+
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light">
+        <tr><th>Type</th><th>Job</th><th>Schedule</th><th>Last status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th>Error</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var r in rows)
+        {
+            <tr class="@(r.IsActive ? "" : "text-muted")">
+                <td>@r.JobKind</td>
+                <td><a href="@(r.JobKind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")">@r.Name</a> @if (!r.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                <td class="mono">@r.CronExpression</td>
+                <td><StatusBadge Status="@r.LastStatus" /></td>
+                <td>@Ui.Local(r.StartedAtUtc)</td>
+                <td>@(r.StartedAtUtc is null ? "" : Ui.Duration(r.StartedAtUtc.Value, r.FinishedAtUtc))</td>
+                <td class="text-end">@r.Rows?.ToString("N0")</td>
+                <td class="small text-danger">@Ui.ShortError(r.ErrorMessage)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<JobStatusRow> rows = [];
+    private IList<Hangfire.Storage.Monitoring.ServerDto> servers = [];
+    private long enqueued, processing, failed;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        rows = await Repo.GetJobStatusAsync();
+        var mon = Storage.GetMonitoringApi();
+        // any Hangfire server (ours or a shared host) that listens to at least one SqlDataCollector queue
+        servers = mon.Servers().Where(s => s.Queues.Any(q => CollectorQueues.All.Contains(q, StringComparer.OrdinalIgnoreCase))).ToList();
+        var stats = mon.GetStatistics();
+        enqueued = stats.Enqueued; processing = stats.Processing;
+        failed = mon.FailedByDatesCount().Where(kv => kv.Key >= DateTime.UtcNow.Date.AddDays(-1)).Sum(kv => kv.Value);
+    }
+}

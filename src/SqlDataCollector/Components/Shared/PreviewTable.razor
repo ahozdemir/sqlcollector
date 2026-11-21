@@ -1,0 +1,28 @@
+@if (Result is not null)
+{
+    <div class="preview border rounded bg-white">
+        <table class="table table-sm table-striped mb-0 mono">
+            <thead class="table-light sticky-top">
+                <tr>
+                    @foreach (var c in Result.Schema)
+                    {
+                        <th title="@c.TypeDeclaration">@c.Name<br /><span class="fw-normal text-muted small">@c.TypeDeclaration</span></th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in Result.Rows)
+                {
+                    <tr>
+                        @foreach (var v in row)
+                        {
+                            @if (v is null) { <td class="null">NULL</td> } else { <td title="@v">@v</td> }
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div class="small text-muted mt-1">Showing @Result.Rows.Count row(s) (max 50).</div>
+}
+@code { [Parameter] public PreviewResult? Result { get; set; } }

@@ -1,0 +1,23 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/*
+!.vscode/extensions.json
+TestResults/
+*.trx
+appsettings.*.local.json
+secrets/
+docker/.env
+docker/data/
+.claude/settings.local.json
+__pycache__/
+*.pyc
+tests/e2e/screenshots/
+.local/
+src/SqlDataCollector/appsettings.LocalTest.json
+docker/data/
+
+# archives handed over during development
+*.zip

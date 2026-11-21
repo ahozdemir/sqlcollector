@@ -1,0 +1,188 @@
+namespace SqlDataCollector.Models;
+
+public enum SourceType : byte { Table = 1, Query = 2 }
+
+public enum LoadMode : byte { Append = 1, Replace = 2, Incremental = 3 }
+
+public enum ExportMode : byte { Full = 1, Incremental = 2, Query = 3, AllTables = 4 }
+
+public enum QuoteMode : byte { Minimal = 0, AllText = 1, All = 2 }
+
+public enum SchemaPolicy : byte { Strict = 1, Evolve = 2 }
+
+public sealed class SqlServerDef
+{
+    public int SqlServerId { get; set; }
+    public string Name { get; set; } = "";
+    public string ServerAddress { get; set; } = "";
+    public bool IsSource { get; set; } = true;
+    public bool IsTarget { get; set; }
+    public string EncryptMode { get; set; } = "Mandatory";
+    public bool TrustServerCertificate { get; set; }
+    public bool ReadOnlyIntent { get; set; }
+    public bool MultiSubnetFailover { get; set; }
+    public int ConnectTimeoutSec { get; set; } = 30;
+    public string? Description { get; set; }
+    public bool IsActive { get; set; } = true;
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+}
+
+public sealed class ExtractJobDef
+{
+    public int ExtractJobId { get; set; }
+    public string Name { get; set; } = "";
+    public int SourceServerId { get; set; }
+    public string SourceServerName { get; set; } = "";
+    public string SourceDatabase { get; set; } = "";
+    public SourceType SourceType { get; set; } = SourceType.Table;
+    public string? SourceSchema { get; set; }  // nullable in DB: no default (Dapper skips setters for NULL)
+    public string? SourceTable { get; set; }
+    public string? ColumnList { get; set; }
+    public string? FilterClause { get; set; }
+    public string? SourceQuery { get; set; }
+    public bool UseNoLock { get; set; }
+    public LoadMode LoadMode { get; set; } = LoadMode.Append;
+    public string? WatermarkColumn { get; set; }
+    public SchemaPolicy SchemaPolicy { get; set; } = SchemaPolicy.Strict;
+    public bool PartitionDaily { get; set; }
+    public int TargetServerId { get; set; }
+    public string TargetServerName { get; set; } = "";
+    public string TargetDatabase { get; set; } = "";
+    public string TargetSchema { get; set; } = "stage";
+    public string TargetTable { get; set; } = "";
+    public string CronExpression { get; set; } = "0 2 * * *";
+    public string TimeZoneId { get; set; } = "Europe/Istanbul";
+    public int? RetentionDays { get; set; }
+    public int CommandTimeoutSec { get; set; } = 3600;
+    public int BatchSize { get; set; } = 10000;
+    public bool ReplaceRebuild { get; set; }   // Replace: rebuild the table and swap it in
+    public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
+    public bool IsActive { get; set; } = true;
+    public string? CreatedBy { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+}
+
+public sealed class ExtractState
+{
+    public string? WatermarkType { get; set; }
+    public string? WatermarkValue { get; set; }
+}
+
+public sealed class ExportJobDef
+{
+    public int ExportJobId { get; set; }
+    public string Name { get; set; } = "";
+    public ExportMode ExportMode { get; set; } = ExportMode.Incremental;
+    public int SourceServerId { get; set; }
+    public string SourceServerName { get; set; } = "";
+    public string SourceDatabase { get; set; } = "";
+    public string? SourceSchema { get; set; }  // nullable in DB: no default (Dapper skips setters for NULL)
+    public string? SourceTable { get; set; }
+    public string? SourceQuery { get; set; }
+    public string? ColumnList { get; set; }
+    public bool IncludeTechnicalColumns { get; set; }
+    public string CronExpression { get; set; } = "0 3 * * *";
+    public string TimeZoneId { get; set; } = "Europe/Istanbul";
+    public string Bucket { get; set; } = "";
+    public string ObjectNameTemplate { get; set; } = "exports/{Name}/dt={Date}/{Name}_{DateCompact}_{Time}_{Part}.csv";
+    public string Delimiter { get; set; } = ",";
+    public QuoteMode QuoteMode { get; set; }
+    public string NullValue { get; set; } = "";
+    public string LineEnding { get; set; } = "LF";
+    public bool Utf8Bom { get; set; }
+    public bool Gzip { get; set; }  // gzip the files uploaded to GCS (default: plain CSV); the local archive is always gzip
+    public int? MaxRowsPerFile { get; set; }
+    public bool UploadWhenEmpty { get; set; } = true;
+    public bool WriteManifest { get; set; } = true;
+    public int CommandTimeoutSec { get; set; } = 3600;
+    public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
+    public bool IsActive { get; set; } = true;
+    public string? CreatedBy { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+}
+
+public sealed class RoleAssignmentDef
+{
+    public int RoleAssignmentId { get; set; }
+    public string PrincipalName { get; set; } = "";
+    public string PrincipalType { get; set; } = "G";
+    public string Role { get; set; } = AppRoles.Viewer;
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+}
+
+public sealed class ServerPermissionDef
+{
+    public int ServerPermissionId { get; set; }
+    public string PrincipalName { get; set; } = "";
+    public int SqlServerId { get; set; }
+    public string ServerName { get; set; } = "";
+    public string? DatabaseName { get; set; }
+    public bool CanSource { get; set; } = true;
+    public bool CanTarget { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+}
+
+public sealed class RunRow
+{
+    public long RunId { get; set; }
+    public string Kind { get; set; } = "";
+    public int JobId { get; set; }
+    public string JobName { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string? TriggeredBy { get; set; }
+    public DateTime StartedAtUtc { get; set; }
+    public DateTime? FinishedAtUtc { get; set; }
+    public long? Rows { get; set; }
+    public string? Detail { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public sealed class JobStatusRow
+{
+    public string JobKind { get; set; } = "";
+    public int JobId { get; set; }
+    public string Name { get; set; } = "";
+    public bool IsActive { get; set; }
+    public string CronExpression { get; set; } = "";
+    public string? LastStatus { get; set; }
+    public DateTime? StartedAtUtc { get; set; }
+    public DateTime? FinishedAtUtc { get; set; }
+    public int? DurationSec { get; set; }
+    public long? Rows { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public sealed class AuditRow
+{
+    public long AuditLogId { get; set; }
+    public DateTime AtUtc { get; set; }
+    public string UserName { get; set; } = "";
+    public string Action { get; set; } = "";
+    public string Entity { get; set; } = "";
+    public string? EntityId { get; set; }
+    public string? Details { get; set; }
+}
+
+public sealed record RunningLoad(long LoadRunId, int ExtractJobId, int TargetServerId, string TargetDatabase, string TargetSchema, string TargetTable);
+
+public sealed record RunningExport(long ExportRunId, int ExportJobId);
+
+public sealed record CollectedTable(string SchemaName, string TableName)
+{
+    public string Key => $"{SchemaName}.{TableName}";
+}
+
+public sealed record ExportTableState(string SchemaName, string TableName, long LastExportedLoadId, DateTime UpdatedAtUtc);
+
+public static class AppRoles
+{
+    public const string Admin = "Admin";
+    public const string Editor = "Editor";
+    public const string Viewer = "Viewer";
+    public static readonly string[] All = [Admin, Editor, Viewer];
+}

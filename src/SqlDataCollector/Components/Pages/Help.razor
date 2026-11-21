@@ -1,0 +1,389 @@
+@page "/help"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+
+<PageTitle>Help – SqlDataCollector</PageTitle>
+
+<div class="row">
+    <div class="col-lg-3 d-none d-lg-block">
+        <nav class="help-toc card"><div class="card-body">
+            <div class="section-title mb-2">Contents</div>
+            @foreach (var (id, title) in Toc)
+            {
+                <a href="/help#@id">@title</a>
+            }
+        </div></nav>
+    </div>
+
+    <div class="col-lg-9 help-content">
+        <h1 class="h4 mb-3">Help</h1>
+
+        <section id="overview">
+            <h2>Overview</h2>
+            <p>SqlDataCollector collects data on a schedule from several SQL Server <b>sources</b> into tables on a <b>target</b> SQL Server,
+               keeps it there for a configurable <b>retention</b> period, and exports it as <b>CSV files to Google Cloud Storage</b>.
+               Scheduling and execution are handled by <b>Hangfire</b>.</p>
+            <ul>
+                <li><b>Extract jobs</b> copy a table, a view, a query or a stored procedure result from a source database into a target table.</li>
+                <li><b>GCS export jobs</b> write the collected data as CSV files (optionally gzip, split into parts) and upload them to a bucket.</li>
+                <li><b>Retention</b> removes data older than N days from target tables (instantly, if the table is partitioned by day).</li>
+            </ul>
+        </section>
+
+        <section id="quick-start">
+            <h2>Quick start</h2>
+            <ol>
+                <li><b>Servers</b> (Admin): add your source and target SQL Servers and click <i>Test</i>. Connections use the application's service account.</li>
+                <li><b>Permissions</b> (Admin): give AD groups a role, and tell which servers/databases Editors may use as source or target.</li>
+                <li><b>Extract Jobs → New job</b>: pick the source server, database and table(s) → <i>Preview</i> → pick the target → <i>Check target</i> → choose the load mode and retention → choose a schedule → <i>Save</i>.</li>
+                <li><b>GCS Exports → New export</b>: choose the target database, mode <i>All collected tables</i>, the bucket and a nightly schedule (e.g. 01:00).</li>
+                <li>Watch <b>Status</b> and <b>Run History</b>. Use <i>Run now</i> on a job page to test it immediately.</li>
+            </ol>
+        </section>
+
+        <section id="architecture">
+            <h2>Architecture: Web and Worker</h2>
+            <p>The same application is installed on one or more machines; the setting <code>Collector:Roles</code> decides what each one does.</p>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Role</th><th>What it does</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Web</b></td><td>This user interface. Saves job definitions and schedules. Never moves data.</td></tr>
+                    <tr><td><b>Worker</b></td><td>Hangfire Server (Windows Service). Executes extract, export, retention and sync jobs.</td></tr>
+                </tbody>
+            </table>
+            <p><b>No code is sent to Hangfire.</b> When you click <i>Save</i>:</p>
+            <ol>
+                <li>The job definition is stored in the metadata database (<code>etl.ExtractJob</code> / <code>etl.ExportJob</code>).</li>
+                <li>A recurring entry such as <code>extract-5 → "0 2 * * *" → ExtractRunner.RunAsync(5)</code> is written to the Hangfire database.</li>
+                <li>At 02:00 a Worker reads that entry, runs its own copy of <code>ExtractRunner</code>, which reads job 5 from the metadata database and moves the data.</li>
+            </ol>
+            <h3>Routing work with queues</h3>
+            <p>Extract jobs run in the <code>sdc_extract</code> queue, exports in <code>sdc_export</code>, system jobs in <code>sdc_system</code>.
+               With <code>Collector:Queues</code> you can decide which Worker takes what. Example: install a Worker on the <b>target SQL Server host</b>
+               with <code>Queues = sdc_export</code>. Exports then read the data locally, write the CSV files to that machine's disk and upload them from there,
+               while the central Worker runs <code>Queues = sdc_extract,sdc_system</code>.</p>
+            <h3>Deployment modes</h3>
+            <ul>
+                <li><b>Embedded:</b> one app server runs <code>Roles = Web,Worker</code>; the Hangfire tables live in the metadata database.</li>
+                <li><b>Shared Hangfire:</b> the UI runs on the app server (<code>Roles = Web</code>) and jobs are stored in the organization's central Hangfire database
+                    (own schema <code>hangfire_collector</code>). They are executed either by a SqlDataCollector Worker service on the Hangfire server, or by the
+                    organization's existing Hangfire Server host that references <code>SqlDataCollector.Core</code> and listens to the <code>sdc_*</code> queues.</li>
+            </ul>
+            <p>The <b>Status</b> page lists the active Workers and their queues. If no Worker is listed, jobs stay in the queue.</p>
+        </section>
+
+        <section id="extract">
+            <h2>Extract jobs</h2>
+            <p>An extract job reads from a source database and writes into a target table. Rows are streamed (not held in memory) with SqlBulkCopy.
+               Every target table gets four technical columns:</p>
+            <table class="table table-sm table-bordered bg-white mono">
+                <tbody>
+                    <tr><td>_LoadId</td><td>Id of the load run (etl.LoadRun). Increases with every run.</td></tr>
+                    <tr><td>_LoadedAt</td><td>UTC time of the load. Used by retention and partitioning.</td></tr>
+                    <tr><td>_ExtractJobId</td><td>Job that wrote the row (several jobs may write to one table).</td></tr>
+                    <tr><td>_SourceServer</td><td>Name of the source server.</td></tr>
+                </tbody>
+            </table>
+            <p>If a run fails, the rows it already wrote are removed again. If a Worker crashes in the middle of a load, the next sync job cleans it up.</p>
+        </section>
+
+        <section id="extract-source">
+            <h2>Choosing the source</h2>
+            <ul>
+                <li><b>Table / view:</b> select one or more tables. With several tables, one job per table is created (all columns, same table name on the target).
+                    With a single table you can pick columns, add a filter (<i>without</i> the <code>WHERE</code> keyword) and use <code>NOLOCK</code>.</li>
+                <li><b>Advanced column list:</b> free SQL expressions, e.g. <code>Id, CAST(Geo.ToString() AS nvarchar(max)) AS Geo</code>. Every column needs a name.</li>
+                <li><b>SQL query / procedure:</b> any statement that returns a result set: CTEs, temp tables, <code>EXEC dbo.usp_Report</code>.</li>
+                <li><b>Preview</b> runs the source and shows the first 50 rows and the column types.</li>
+            </ul>
+            <p>Only servers and databases you are permitted to use are listed.</p>
+        </section>
+
+        <section id="extract-target">
+            <h2>Target table and schema policy</h2>
+            <p><b>Target schema</b>: for a new job it is filled from the source database name (<code>ERP</code> → <code>erp</code>, <code>Sales DB</code> → <code>sales_db</code>)
+               until you type your own. One schema per source avoids collisions between tables with the same name in different sources
+               (<code>ERP.dbo.Customers</code> and <code>CRM.dbo.Customers</code>), keeps GCS folders readable and lets you grant and export per source.
+               <code>dbo</code> works too; collector tables only ever touch tables with <code>_LoadId</code>.</p>
+            <p><b>Check target</b> compares the source columns with the target table before you save:</p>
+            <ul>
+                <li><i>Table does not exist</i> → it is created on the first run (with technical columns and indexes).</li>
+                <li><i>Matches exactly</i> → data is written.</li>
+                <li><i>Differences</i> → listed column by column (missing in target, only in target, too narrow, type mismatch).</li>
+            </ul>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Policy</th><th>Behaviour</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Strict</b> (default)</td><td>Create the table if it is missing. If it exists it must match exactly, otherwise the job fails and reports the difference.</td></tr>
+                    <tr><td><b>Evolve</b></td><td>Add new columns (also technical columns on existing tables) and widen narrow text/binary columns. Real type changes still fail.</td></tr>
+                </tbody>
+            </table>
+            <p>A pre-existing table without the technical columns is never "identical"; use Evolve or a new table name.</p>
+        </section>
+
+        <section id="load-modes">
+            <h2>Load modes</h2>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Mode</th><th>What happens on each run</th><th>Typical use</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Append</b></td><td>All selected rows are added. Older loads stay (until retention removes them).</td><td>Daily snapshots, history</td></tr>
+                    <tr><td><b>Replace</b></td><td>All rows are loaded; after success the job's older loads are deleted.</td><td>Small reference tables</td></tr>
+                    <tr><td><b>Incremental</b></td><td>Only rows with <code>watermark column &gt; last value</code> are read. The highest value read is stored after success.</td><td>Large tables with ModifiedAt / rowversion</td></tr>
+                </tbody>
+            </table>
+            <h3>Replace: delete previous loads or rebuild and swap</h3>
+            <ul>
+                <li><b>Delete previous loads</b> (default): the new load is added, then the job's older loads are deleted in batches. Grants and indexes on the table stay.</li>
+                <li><b>Rebuild the table and swap it in</b>: every run loads a new table <code>&lt;table&gt;__sdc_new</code> created from the <i>current</i> source schema
+                    (minimally logged with <code>TABLOCK</code>), then swaps it in with two renames and drops the old table in one short transaction.
+                    Readers see either the old or the complete new table; if the load fails, the old table stays untouched. Column changes in the source are absorbed
+                    (the schema policy does not apply). Good for large Replace tables, where deleting the previous load is slow and log-heavy.</li>
+                <li>Rebuild only replaces tables created by the application (with <code>_LoadId</code>), only if no other job writes to the same table, and not with daily partitioning.
+                    Grants on the table itself and indexes added by hand are lost on every run: grant permissions on the schema
+                    (<code>GRANT SELECT ON SCHEMA::erp TO …</code>) or via <code>db_datareader</code>. A view created <code>WITH SCHEMABINDING</code> on the table blocks the swap.</li>
+            </ul>
+            <h3>Watermark</h3>
+            <ul>
+                <li>Supported column types: datetime, datetime2, smalldatetime, date, datetimeoffset, int, bigint, smallint, tinyint, decimal, rowversion.</li>
+                <li>The value is passed with the column's real SQL type (no precision loss with datetime, index seeks are kept).</li>
+                <li>Query sources must use the parameter themselves: <code>WHERE (@@WatermarkFrom IS NULL OR o.ModifiedAt &gt; @@WatermarkFrom)</code>. It is NULL on the first run.</li>
+                <li><i>Reset</i> on the job page makes the next run read everything again.</li>
+                <li>Rows committed late with an older watermark value are not picked up; use rowversion where possible.</li>
+            </ul>
+        </section>
+
+        <section id="partitioning">
+            <h2>Daily partitioning</h2>
+            <p>If enabled when the target table is <b>created</b>, the table is partitioned by day on <code>_LoadedAt</code> (UTC).
+               Partitions for the next 7 days are created automatically. Retention then removes whole days with <code>TRUNCATE … WITH (PARTITIONS)</code>
+               instead of deleting rows one by one – instant, with almost no log. It has no effect on tables that already exist.</p>
+        </section>
+
+        <section id="retention">
+            <h2>Retention</h2>
+            <p>The retention job runs nightly (default 01:30, set on <i>Settings</i>) and removes rows older than <i>Retention (days)</i>, based on <code>_LoadedAt</code>.
+               Empty = keep forever (if the policy allows it). <b>Replace</b> jobs have no retention: they keep only the latest successful load,
+               so the retention policy does not apply to them (a paused Replace job keeps its last load). If several jobs write to the same table, each job's rows follow that job's retention;
+               whole daily partitions are truncated only when every job writing to the table has a retention, so rows of a "keep forever" job are never lost.</p>
+            <p>The organization-wide <a href="/help#settings">retention policy</a> (default, maximum, keep forever, who may change it) is enforced when a job is saved
+               and again by the retention job: a longer retention is capped at the maximum, a missing one gets the default when keep forever is not allowed.
+               Only tables written by the application (with <code>_LoadId</code>) are ever cleaned up.</p>
+        </section>
+
+        <section id="export">
+            <h2>GCS exports</h2>
+            <p>Export jobs write CSV files and upload them to Google Cloud Storage (resumable upload, retries, size check). Files are written to the
+               Worker's <code>WorkDirectory</code> in day folders first. Files are uploaded as <b>plain CSV</b> (tick <i>gzip uploaded files</i> to upload
+               <code>.csv.gz</code> instead). With <code>KeepLocalFiles</code> the local copies are <b>always gzip-compressed</b> after a successful upload
+               (<code>…\2026-11-21\&lt;job&gt;_&lt;run&gt;\&lt;schema.table&gt;\*.csv.gz</code>) and kept for <code>LocalFileRetentionDays</code>.</p>
+        </section>
+
+        <section id="export-modes">
+            <h2>Export modes</h2>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Mode</th><th>What is exported</th></tr></thead>
+                <tbody>
+                    <tr><td><b>All collected tables</b></td><td>Every target table of the extract jobs in the chosen database (optionally one schema), <b>one CSV set per table</b>,
+                        containing only the loads since the previous export of that table. Scheduled nightly, this is exactly "what was collected today".
+                        New tables are picked up automatically. Each table is tracked separately: if one table fails, the others are still exported and
+                        a retry only re-does what is missing (status <i>PartiallyFailed</i>).</td></tr>
+                    <tr><td><b>Single table, incremental</b></td><td>Loads of one table since the last export.</td></tr>
+                    <tr><td><b>Single table, full</b></td><td>The whole table every time.</td></tr>
+                    <tr><td><b>Custom query</b></td><td>Any SQL; parameters <code>@@RunDate</code> (date in the job's time zone) and <code>@@RunAtUtc</code>.</td></tr>
+                </tbody>
+            </table>
+            <p>A load that is still running is never exported half-done; it is picked up by the next run. <i>Reset export state</i> exports everything again.</p>
+            <p><b>Read-only by design:</b> every export read and the export <i>Preview</i> switch to the read-only database user
+               <code>Collector:ExportReadAsUser</code> (default <code>sdc_export_reader</code>) with <code>EXECUTE AS USER … WITH COOKIE</code>.
+               Custom queries and column lists therefore cannot change data (<code>INSERT/UPDATE/DELETE/DROP</code> fail with "permission denied") and cannot
+               <code>REVERT</code> to the service account. The user must exist in every database exports read from (DBA script: <code>sql/01_permissions_template.sql</code>);
+               queries cannot reach other databases (three-part names) in this security context. <i>Check permissions</i> on the Servers page verifies the user.</p>
+        </section>
+
+        <section id="gcs">
+            <h2>GCS settings and object names</h2>
+            <p>Authentication is configured on the Worker: <code>Gcs:CredentialsPath</code> (service account JSON) or Application Default Credentials.
+               The service account needs <code>roles/storage.objectCreator</code> on the bucket.</p>
+            <table class="table table-sm table-bordered bg-white mono">
+                <thead class="table-light"><tr><th>Token</th><th>Value</th></tr></thead>
+                <tbody>
+                    <tr><td>{Name}</td><td>job name</td></tr>
+                    <tr><td>{Database} {Schema} {Table}</td><td>source of the file</td></tr>
+                    <tr><td>{Date} / {DateCompact} / {Time}</td><td>2026-11-21 / 20261121 / 010000 (job time zone)</td></tr>
+                    <tr><td>{Part}</td><td>0001, 0002 … (file part)</td></tr>
+                </tbody>
+            </table>
+            <p>Default for all tables: <code>exports/{Database}/{Schema}.{Table}/dt={Date}/{Table}_{DateCompact}_{Time}_{Part}.csv</code>.
+               The <code>dt=</code> folder works as a Hive/BigQuery partition. A run manifest is written to <code>…/_manifests/</code>.</p>
+        </section>
+
+        <section id="csv-format">
+            <h2>CSV format</h2>
+            <ul>
+                <li>RFC 4180: fields containing the delimiter, quotes or line breaks are quoted; quotes are doubled.</li>
+                <li>NULL is written as the <i>NULL value</i> (default empty); an empty string is written as <code>""</code> so the two stay distinguishable.</li>
+                <li>Dates: <code>yyyy-MM-dd HH:mm:ss.fffffff</code> (trailing zeros removed), datetimeoffset with offset, bit as 1/0, binary as 0x… hex.</li>
+                <li>decimal(38,x) values are written exactly. Text is UTF-8 (optional BOM for Excel). Uploaded files are plain CSV by default; the local archive is gzip.</li>
+                <li><i>Max rows per file</i> splits large tables into parts; every part has a header row.</li>
+            </ul>
+        </section>
+
+        <section id="cron">
+            <h2>Scheduling (cron)</h2>
+            <p>Five fields: <code>minute hour day-of-month month day-of-week</code>, evaluated in the job's time zone. The form shows the next 5 runs.</p>
+            <table class="table table-sm table-bordered bg-white mono">
+                <tbody>
+                    <tr><td>0 2 * * *</td><td>every night at 02:00</td></tr>
+                    <tr><td>*/15 * * * *</td><td>every 15 minutes</td></tr>
+                    <tr><td>0 7 * * 1-5</td><td>weekdays at 07:00</td></tr>
+                    <tr><td>30 0 1 * *</td><td>1st day of every month at 00:30</td></tr>
+                </tbody>
+            </table>
+            <p>A job never runs twice at the same time: if the previous run is still busy, the new trigger is skipped.
+               Schedule exports <b>after</b> the extracts they depend on (e.g. extracts at 00:00–00:30, export at 01:00).</p>
+        </section>
+
+        <section id="servers">
+            <h2>Servers and service accounts</h2>
+            <ul>
+                <li>No SQL passwords are stored. Connections use the Windows account the service runs as (a gMSA is recommended).</li>
+                <li>Worker account: <b>read</b> on sources (never write – Editors can write SQL), <b>write + DDL</b> on the target database
+                    (<code>db_datareader, db_datawriter, db_ddladmin</code>, plus <code>ALTER ANY DATASPACE</code> for partitioning).</li>
+                <li>Web account: read on sources/target (lists, preview, check target), read/write on the metadata database.</li>
+                <li>Export reader: a read-only database user without login (<code>sdc_export_reader</code>) in every database exports read from; both accounts need
+                    <code>IMPERSONATE</code> on it. Export SQL runs as this user, never with the Worker's write/DDL rights. Create it when the target database is set up.</li>
+                <li>Both: <code>SELECT, INSERT, UPDATE, DELETE</code> on the Hangfire schema (<code>SqlDataCollector hangfire-install-script</code> generates the DBA script).</li>
+                <li><i>ApplicationIntent=ReadOnly</i> reads sources from an Availability Group secondary; writes and incremental exports always use the primary.</li>
+                <li>The <i>Servers</i> page has three sections: <b>System databases</b> (metadata and Hangfire, from configuration), <b>Target servers</b>
+                    and <b>Source servers</b>. A server is used as source and/or target (at least one is required); one marked as both appears in both sections.</li>
+            </ul>
+        </section>
+
+        <section id="servers-system">
+            <h2>System databases (metadata and Hangfire)</h2>
+            <p>The metadata database (<code>ConnectionStrings:Metadata</code>) and the Hangfire storage (<code>ConnectionStrings:Hangfire</code>; empty = embedded in the
+               metadata database) are shown read-only. The application needs them to start, so they are set in the appsettings file of each process
+               (samples in <code>deploy/</code>) followed by a service restart. The page shows the Web process's configuration; Workers have their own file.</p>
+            <ul>
+                <li><b>Embedded</b>: Hangfire tables in the metadata database, schema <code>hangfire_collector</code>, <code>HangfirePrepareSchema=true</code>.</li>
+                <li><b>Shared Hangfire database</b>: the organization's central Hangfire database; our own schema installed by the DBA, <code>HangfirePrepareSchema=false</code>.</li>
+            </ul>
+        </section>
+
+        <section id="settings">
+            <h2>Settings: retention and cleanup</h2>
+            <p>Admins set organization-wide policies on <i>Settings</i>. They are stored in the metadata database (<code>etl.SystemSetting</code>), apply to every process
+               without a restart and every change is written to the audit log. Values not saved yet come from appsettings (marked <i>from configuration</i>).</p>
+            <ul>
+                <li><b>Default retention</b>: pre-filled in new extract jobs. <b>Maximum retention</b>: enforced on save; existing jobs with a longer retention are capped by the retention job.</li>
+                <li><b>Allow keep forever</b>: if off, jobs need a retention; old jobs without one get the default (or the maximum) at retention time.</li>
+                <li><b>Editors may change the retention</b>: if off, only Admins change it; Editors' new jobs get the default. Admins also follow the maximum and keep-forever rules.</li>
+                <li><b>Retention schedule</b> (cron, in <code>Collector:SystemTimeZone</code>), <b>run history</b>, <b>audit log</b> and <b>permission check</b> retention in days.</li>
+                <li><b>Orphaned collector tables</b>: lists tables with <code>_LoadId</code>/<code>_ExtractJobId</code> in the target databases used by jobs that no extract job writes to
+                    (e.g. after a job was deleted). Retention never touches them and nothing is dropped automatically.</li>
+                <li>Not managed by the application: GCS objects (use a bucket lifecycle rule), the export Worker's local archive (<code>KeepLocalFiles</code>, <code>LocalFileRetentionDays</code>
+                    in its appsettings) and Hangfire's own job history. Connections, roles/queues, folders and security settings (e.g. <code>ExportReadAsUser</code>) stay in appsettings.</li>
+            </ul>
+        </section>
+
+        <section id="alerts">
+            <h2>Alerts (e-mail, Teams, webhook)</h2>
+            <p>The Web process checks every minute for runs that ended <b>Failed</b>, <b>PartiallyFailed</b>, <b>Abandoned</b> or <b>CleanupPending</b>,
+               for jobs that <b>recovered</b> (first success after a failure), for scheduled runs that <b>did not start</b> (<i>Missed</i>) and for queues
+               without a live Hangfire server for 5 minutes (<i>NoServer</i>). Because it runs in the Web process, it also reports when no Worker is running.</p>
+            <ul>
+                <li><b>Channels</b> (menu <i>Alerts</i>, Admin): e-mail recipients, a Microsoft Teams Workflows webhook (Adaptive Card) or a generic JSON webhook
+                    (also accepted by Slack). Each channel chooses its events, extract and/or export jobs and an optional job name filter (<code>erp_*; crm_*</code>).
+                    <i>Send test</i> sends a sample alert.</li>
+                <li><b>Notify</b> field of a job: e-mail addresses of the job's owners; they get failures, missed runs and the recovery of that job.</li>
+                <li><b>Repeat interval</b>: the same problem of the same job is sent to a destination at most once per interval (default 60 minutes);
+                    repeats are recorded as <i>Suppressed</i>. A recovery is always sent. Failed deliveries are retried up to 3 times (once a minute).</li>
+                <li><b>Missed</b>: a scheduled occurrence counts as missed when no run started within the grace period (default 15 minutes) and none is running.</li>
+                <li>Alerting starts when the application first runs with this feature: older runs are never reported. Delivery history: <i>Recent deliveries</i>
+                    on the Alerts page (kept as long as the run history).</li>
+                <li>Infrastructure is configured in appsettings: <code>Alerts:Smtp:Host/Port/Security/From</code> (an internal relay is recommended; user name and
+                    password only if required, never stored in the database) and <code>Alerts:PublicUrl</code> for links. Webhook URLs are secrets: they are shown and audited masked.
+                    The Web server needs outbound access to the SMTP server and the webhook hosts; <i>Check permissions</i> tests the TCP connection.</li>
+                <li>A completely stopped application cannot alert: monitor <code>/health</code> with your monitoring system.</li>
+            </ul>
+        </section>
+
+        <section id="permission-check">
+            <h2>Permission check</h2>
+            <p><b>Check permissions</b> on the <i>Servers</i> page compares the service accounts' effective permissions with the minimum of
+               <code>sql/01_permissions_template.sql</code>, using <code>HAS_PERMS_BY_NAME</code> only (no data is read or written).</p>
+            <ul>
+                <li>The Web account is checked immediately. For Worker accounts a check job is queued on every queue (<code>sdc_extract</code>, <code>sdc_export</code>,
+                    <code>sdc_system</code>) a live Hangfire server listens to; the process that runs it checks its own account. Click <i>Refresh results</i> after a few seconds.
+                    If several servers listen to the same queue, only one of them runs the job; every Worker also checks itself on startup and logs problems as warnings.</li>
+                <li>What is checked depends on the process: metadata and Hangfire for everyone; target databases used by jobs for <code>sdc_extract</code>/<code>sdc_system</code> (load, DDL,
+                    <code>ALTER ANY DATASPACE</code> when a job uses daily partitions), <code>sdc_export</code> (read) and the Web (read + <code>VIEW DEFINITION</code>);
+                    source objects of the jobs for <code>sdc_extract</code> and the Web. For databases that exports read from, <code>sdc_export</code> and the Web also switch to the
+                    export reader user and verify that it can read and cannot write.</li>
+                <li>Statuses: <span class="badge bg-success">Ok</span>, <span class="badge bg-danger">Missing</span> (a required permission is not granted),
+                    <span class="badge bg-warning text-dark">Excess</span> (granted but must not be: write/DDL on sources, write on targets for a Web-only process,
+                    rights outside our schema in a shared Hangfire database), <span class="badge bg-info text-dark">Warning</span> (cannot be determined exactly, e.g. free SQL queries
+                    without database-wide <code>SELECT</code>), <span class="badge bg-danger">Error</span> (connection failed).</li>
+                <li>Excess on sources matters: Editors can run free SQL there, so the service account's permissions are the security boundary.
+                    A local test environment that runs as <code>sysadmin</code> shows Excess everywhere – that is expected.</li>
+                <li>The latest result per process (role, queue, host) is kept; results older than 30 days are removed.</li>
+            </ul>
+        </section>
+
+        <section id="roles">
+            <h2>Roles and permissions</h2>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Role</th><th>Can do</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Admin</b></td><td>Everything: servers, permissions, all jobs, audit, full Hangfire dashboard.</td></tr>
+                    <tr><td><b>Editor</b></td><td>Create, change, run and delete jobs on the servers/databases granted to them.</td></tr>
+                    <tr><td><b>Viewer</b></td><td>See jobs, status and run history; read-only Hangfire dashboard.</td></tr>
+                </tbody>
+            </table>
+            <p>Roles and server/database permissions are assigned to AD users or groups. A permission without a database applies to all databases on that server.
+               Changes reach signed-in users within 10 minutes. The local <code>admin</code> account is for initial setup and emergencies.</p>
+        </section>
+
+        <section id="hangfire">
+            <h2>Hangfire dashboard</h2>
+            <p>The dashboard (menu <i>Hangfire ↗</i>) shows queues, running/failed jobs, retries and Workers. Admins can trigger, retry or delete jobs there;
+               other roles see it read-only. Job definitions and schedules are edited only in this application.</p>
+        </section>
+
+        <section id="troubleshooting">
+            <h2>Statuses and troubleshooting</h2>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Status</th><th>Meaning</th></tr></thead>
+                <tbody>
+                    <tr><td><span class="badge bg-success">Succeeded</span></td><td>Completed.</td></tr>
+                    <tr><td><span class="badge bg-primary">Running</span></td><td>In progress.</td></tr>
+                    <tr><td><span class="badge bg-danger">Failed</span></td><td>Error; Hangfire retries automatically (extract 2×, export 3×). Click the row for details.</td></tr>
+                    <tr><td><span class="badge bg-warning text-dark">PartiallyFailed</span></td><td>All-tables export: some tables failed, the rest were exported.</td></tr>
+                    <tr><td><span class="badge bg-secondary">Skipped</span></td><td>Nothing to export, or the source table does not exist yet.</td></tr>
+                    <tr><td><span class="badge bg-warning text-dark">Abandoned</span></td><td>The Worker stopped during the run; partial data was cleaned up.</td></tr>
+                    <tr><td><span class="badge bg-danger">CleanupPending</span></td><td>A failed load could not be removed yet; the sync job retries.</td></tr>
+                </tbody>
+            </table>
+            <h3>Common errors</h3>
+            <ul>
+                <li><b>Strict schema policy: target … does not match</b> – use <i>Check target</i>; fix the table, rename the target or switch to Evolve.</li>
+                <li><b>Duplicate / unnamed column</b> – give every computed column a unique alias in the query.</li>
+                <li><b>Unsupported type geography/geometry/hierarchyid</b> – convert it in the query (<code>.ToString()</code>).</li>
+                <li><b>Login failed / cannot open database</b> – the service account lacks access on that server/database.</li>
+                <li><b>Jobs never start</b> – no Worker is running or it does not listen to the job's queue (see Status).</li>
+            </ul>
+        </section>
+    </div>
+</div>
+
+@code {
+    private static readonly (string Id, string Title)[] Toc =
+    [
+        ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
+        ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
+        ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
+        ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "CSV format"),
+        ("cron", "Scheduling (cron)"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
+        ("settings", "Settings: retention and cleanup"), ("alerts", "Alerts"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
+        ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
+    ];
+}

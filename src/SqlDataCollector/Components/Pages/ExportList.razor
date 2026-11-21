@@ -1,0 +1,41 @@
+@page "/export"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+@inject AccessService Access
+
+<PageTitle>GCS Exports</PageTitle>
+
+<div class="d-flex align-items-center mb-3">
+    <h1 class="h4 mb-0 me-auto">GCS Export Jobs <HelpLink Topic="export" Title="GCS exports" /></h1>
+    @if (canEdit) { <a class="btn btn-sm btn-primary" href="/export/new">+ New export</a> }
+</div>
+
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light">
+        <tr><th>Name</th><th>Source</th><th>Mode</th><th>Destination (GCS)</th><th>Format</th><th>Schedule</th><th>Modified by</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var e in jobs)
+        {
+            <tr class="@(e.IsActive ? "" : "text-muted")">
+                <td><a href="/export/@e.ExportJobId">@e.Name</a> @if (!e.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                <td class="mono">@e.SourceServerName / @e.SourceDatabase / @(e.ExportMode switch { ExportMode.Query => "(query)", ExportMode.AllTables => $"(all collected tables{(string.IsNullOrEmpty(e.SourceSchema) ? "" : " in " + e.SourceSchema)})", _ => $"{e.SourceSchema}.{e.SourceTable}" })</td>
+                <td>@e.ExportMode</td>
+                <td class="mono small">gs://@e.Bucket/@e.ObjectNameTemplate</td>
+                <td class="small">@(e.Delimiter == "\t" ? "TAB" : e.Delimiter) @(e.Gzip ? "· gzip" : "") @(e.MaxRowsPerFile is null ? "" : $"· {e.MaxRowsPerFile:N0}/file")</td>
+                <td class="mono">@e.CronExpression</td>
+                <td class="small">@e.ModifiedBy<br /><span class="text-muted">@Ui.Local(e.ModifiedAtUtc)</span></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<ExportJobDef> jobs = [];
+    private bool canEdit;
+    protected override async Task OnInitializedAsync()
+    {
+        jobs = await Repo.GetExportJobsAsync();
+        canEdit = await Access.CanEditAsync();
+    }
+}

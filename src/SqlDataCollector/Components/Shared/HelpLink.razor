@@ -1,0 +1,5 @@
+<a href="/help#@Topic" class="help-link ms-1" title="Help: @Title" target="_blank">?</a>
+@code {
+    [Parameter, EditorRequired] public string Topic { get; set; } = "";
+    [Parameter] public string Title { get; set; } = "";
+}
