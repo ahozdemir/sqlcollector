@@ -41,6 +41,7 @@ public sealed class AlertDispatcher(
         events.AddRange(await RunEventsAsync(since));
         events.AddRange(await MissedEventsAsync(now, baseline, TimeSpan.FromMinutes(cfg.MissedGraceMinutes)));
         events.AddRange(NoServerEvents(now, cfg.ThrottleMinutes));
+        if (CertificateEvent(now) is { } certEvent) events.Add(certEvent);
         if (events.Count == 0) return 0;
 
         var channels = (await repo.GetAlertChannelsAsync()).Where(c => c.IsActive).ToList();
@@ -171,6 +172,18 @@ public sealed class AlertDispatcher(
                 Detail: $"No live Hangfire server has listened to queue {q} since {missingSince:yyyy-MM-dd HH:mm} UTC: {what} are not executed."));
         }
         return list;
+    }
+
+    /// <summary>Once a day while the HTTPS certificate expires within 30 days (or has expired).</summary>
+    private AlertEvent? CertificateEvent(DateTime now)
+    {
+        if (services.GetService(typeof(ICertificateStatus)) is not ICertificateStatus status || status.Current is not { } c) return null;
+        var days = (c.NotAfterUtc - now).TotalDays;
+        if (days > AlertEvents.CertWarningDays) return null;
+        return new AlertEvent(AlertEvents.CertExpiring, "System", 100, "HTTPS certificate", AlertFormat.UnixMinutes(now) / 1440, now,
+            Detail: days > 0
+                ? $"{c.Subject} expires on {c.NotAfterUtc:yyyy-MM-dd} ({Math.Floor(days):N0} days). Import a new certificate on Settings."
+                : $"{c.Subject} expired on {c.NotAfterUtc:yyyy-MM-dd}. Browsers reject the site: import a new certificate on Settings.");
     }
 
     private async Task<AlertEvent> EnrichAsync(AlertEvent e) =>

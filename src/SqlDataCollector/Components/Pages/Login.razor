@@ -2,8 +2,7 @@
 @layout EmptyLayout
 @attribute [AllowAnonymous]
 @attribute [ExcludeFromInteractiveRouting]
-@using Microsoft.Extensions.Options
-@inject IOptions<LocalAdminOptions> LocalAdmin
+@inject LocalAdminStore LocalAdmin
 
 <PageTitle>Sign in – SqlDataCollector</PageTitle>
 
@@ -21,7 +20,32 @@
             </div>
         </div>
 
-        @if (LocalAdmin.Value.Enabled && !string.IsNullOrWhiteSpace(LocalAdmin.Value.PasswordHash))
+        @if (LocalAdmin.Enabled && needsPassword)
+        {
+            <details class="card" open="@(isLocal || SetupError is not null)">
+                <summary class="card-header small">Local administrator – first sign-in</summary>
+                <div class="card-body">
+                    @if (!isLocal)
+                    {
+                        <div class="small text-muted">The local administrator password has not been set yet. For security it can only be set
+                            on the server itself: open <span class="mono">https://localhost/login</span> there.</div>
+                    }
+                    else
+                    {
+                        <p class="small text-muted">Choose the password of the local administrator <b>@LocalAdmin.Username</b>
+                            (at least @LocalAdminStore.MinLength characters). You will be signed in afterwards; then grant roles to AD users or groups on <i>Permissions</i>.</p>
+                        @if (SetupError is not null) { <div class="alert alert-danger py-2 small">@SetupError</div> }
+                        <form method="post" action="/auth/local-setup">
+                            <AntiforgeryToken />
+                            <div class="mb-2"><input class="form-control" name="password" type="password" placeholder="New password" autocomplete="new-password" required minlength="@LocalAdminStore.MinLength" /></div>
+                            <div class="mb-3"><input class="form-control" name="confirm" type="password" placeholder="Repeat the password" autocomplete="new-password" required /></div>
+                            <button class="btn btn-primary w-100" type="submit">Set password and sign in</button>
+                        </form>
+                    }
+                </div>
+            </details>
+        }
+        else if (LocalAdmin.Enabled)
         {
             <details class="card">
                 <summary class="card-header small">Local administrator</summary>
@@ -40,9 +64,20 @@
 </div>
 
 @code {
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
     [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
     [SupplyParameterFromQuery] public string? Error { get; set; }
     [SupplyParameterFromQuery] public string? LoggedOut { get; set; }
+    [SupplyParameterFromQuery] public string? SetupError { get; set; }
+
+    private bool needsPassword;
+    private bool isLocal;
+
+    protected override async Task OnInitializedAsync()
+    {
+        needsPassword = await LocalAdmin.NeedsInitialPasswordAsync();
+        isLocal = LocalAdminStore.IsLocalRequest(HttpContext?.Connection.RemoteIpAddress);
+    }
 
     private string ErrorText => Error switch
     {
@@ -50,6 +85,8 @@
         "locked" => "Too many failed attempts. Try again in 15 minutes.",
         "disabled" => "Local administrator sign-in is disabled.",
         "expired" => "The form expired, please try again.",
+        "notlocal" => "The initial local administrator password can only be set on the server itself.",
+        "alreadyset" => "The local administrator password has already been set; sign in with it.",
         _ => "Sign-in failed."
     };
 }

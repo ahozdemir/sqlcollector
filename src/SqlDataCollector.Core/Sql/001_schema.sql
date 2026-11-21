@@ -283,10 +283,14 @@ IF OBJECT_ID(N'etl.SystemSetting', N'U') IS NULL
 CREATE TABLE etl.SystemSetting
 (
     Name          varchar(100) NOT NULL CONSTRAINT PK_SystemSetting PRIMARY KEY,
-    Value         nvarchar(400) NULL,
+    Value         nvarchar(max) NULL,
     ModifiedBy    nvarchar(256) NOT NULL,
     ModifiedAtUtc datetime2(3) NOT NULL CONSTRAINT DF_SystemSetting_Mod DEFAULT (SYSUTCDATETIME())
 );
+GO
+-- upgrade: Value was nvarchar(400) – too small for encrypted secrets (GCS key)
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'etl.SystemSetting') AND name = N'Value' AND max_length <> -1)
+    ALTER TABLE etl.SystemSetting ALTER COLUMN Value nvarchar(max) NULL;
 GO
 
 /* ---------------- Alerts ----------------

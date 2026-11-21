@@ -171,7 +171,28 @@ public static class AuthEndpoints
             return Results.LocalRedirect(SafeReturn(returnUrl));
         }).AllowAnonymous();
 
-        app.MapPost("/auth/local", async (HttpContext ctx, IOptions<LocalAdminOptions> opt, LoginThrottle throttle,
+        // First sign-in: the local admin sets the password (only from the server itself, only while none exists)
+        app.MapPost("/auth/local-setup", async (HttpContext ctx, LocalAdminStore store, MetadataRepository repo, ILoggerFactory lf, IAntiforgery antiforgery) =>
+        {
+            try { await antiforgery.ValidateRequestAsync(ctx); }
+            catch (AntiforgeryValidationException) { return Results.Redirect("/login?error=expired"); }
+
+            if (!store.Enabled) return Results.Redirect("/login?error=disabled");
+            if (!LocalAdminStore.IsLocalRequest(ctx.Connection.RemoteIpAddress)) return Results.Redirect("/login?error=notlocal");
+            if (!await store.NeedsInitialPasswordAsync()) return Results.Redirect("/login?error=alreadyset");
+
+            var form = await ctx.Request.ReadFormAsync();
+            if (LocalAdminStore.Validate(form["password"], form["confirm"]) is { } problem)
+                return Results.Redirect("/login?setupError=" + Uri.EscapeDataString(problem));
+
+            await store.SetPasswordAsync(form["password"].ToString(), $"local\\{store.Username}");
+            lf.CreateLogger("Auth").LogWarning("The local admin password was set on first sign-in (from {Ip}).", ctx.Connection.RemoteIpAddress);
+            await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, PrincipalBuilder.BuildForLocalAdmin(store.Username));
+            await repo.AuditAsync($"local\\{store.Username}", "Login", "Auth", null, new { ip = ctx.Connection.RemoteIpAddress?.ToString(), firstSignIn = true });
+            return Results.LocalRedirect("/");
+        }).AllowAnonymous();
+
+        app.MapPost("/auth/local", async (HttpContext ctx, IOptions<LocalAdminOptions> opt, LocalAdminStore store, LoginThrottle throttle,
             MetadataRepository repo, ILoggerFactory lf, IAntiforgery antiforgery) =>
         {
             try { await antiforgery.ValidateRequestAsync(ctx); }
@@ -184,12 +205,13 @@ public static class AuthEndpoints
             var key = ctx.Connection.RemoteIpAddress?.ToString() ?? "?";
             var o = opt.Value;
 
-            if (!o.Enabled || string.IsNullOrWhiteSpace(o.PasswordHash))
+            var hash = await store.GetHashAsync();
+            if (!o.Enabled || hash is null)
                 return Results.Redirect("/login?error=disabled");
             if (throttle.IsLocked(key))
                 return Results.Redirect("/login?error=locked");
 
-            if (!string.Equals(user, o.Username, StringComparison.OrdinalIgnoreCase) || !PasswordHasher.Verify(pass, o.PasswordHash))
+            if (!string.Equals(user, o.Username, StringComparison.OrdinalIgnoreCase) || !PasswordHasher.Verify(pass, hash))
             {
                 throttle.Fail(key);
                 lf.CreateLogger("Auth").LogWarning("Local admin login failed: user={User}, ip={Ip}", user, key);

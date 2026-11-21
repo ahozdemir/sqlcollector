@@ -6,6 +6,12 @@
       "runtimeExecutable": "powershell",
       "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/dev.ps1", "run", "-SqlInstance", "."],
       "port": 5080
+    },
+    {
+      "name": "sdc-local-firstrun",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$env:LocalAdmin__PasswordHash = ' '; & ./scripts/dev.ps1 run -SqlInstance ."],
+      "port": 5080
     }
   ]
 }

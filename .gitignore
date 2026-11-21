@@ -21,3 +21,4 @@ docker/data/
 
 # archives handed over during development
 *.zip
+artifacts/

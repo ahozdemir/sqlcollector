@@ -2,6 +2,7 @@
 @attribute [Authorize(Policy = AppRoles.Viewer)]
 @inject MetadataRepository Repo
 @inject Hangfire.JobStorage Storage
+@inject CertificateManager Certificates
 
 <PageTitle>Status – SqlDataCollector</PageTitle>
 
@@ -9,6 +10,14 @@
     <h1 class="h4 mb-0 me-auto">Status</h1>
     <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync">Refresh</button>
 </div>
+
+@if (Certificates.Enabled && Certificates.Info is { DaysLeft: <= SqlDataCollector.Alerts.AlertEvents.CertWarningDays } cert)
+{
+    <div class="alert alert-warning py-2 small">
+        The HTTPS certificate <span class="mono">@cert.Subject</span> @(cert.DaysLeft >= 0 ? $"expires in {cert.DaysLeft} days ({cert.NotAfterUtc:yyyy-MM-dd})" : $"expired on {cert.NotAfterUtc:yyyy-MM-dd}").
+        An Admin can import a new one on <a href="/admin/settings">Settings</a>.
+    </div>
+}
 
 <div class="card mb-3">
     <div class="card-body py-2">

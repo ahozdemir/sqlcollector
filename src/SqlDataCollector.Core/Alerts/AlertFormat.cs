@@ -96,6 +96,7 @@ public static partial class AlertFormat
             AlertEvents.Recovered => $"RECOVERED: {what} succeeded again",
             AlertEvents.Missed => $"MISSED: {what} did not run as scheduled",
             AlertEvents.NoServer => $"NO SERVER: {e.JobName}",
+            AlertEvents.CertExpiring => "CERTIFICATE: the HTTPS certificate expires soon",
             _ => $"{e.EventType.ToUpperInvariant()}: {what}{tail}"
         };
     }
@@ -117,7 +118,7 @@ public static partial class AlertFormat
         var f = new List<(string, string)>();
         if (e.JobKind != "System") f.Add(("Job", $"{e.JobName} ({e.JobKind} #{e.JobId})"));
         f.Add(("Event", AlertEvents.Describe(e.EventType)));
-        if (e.EventType is not (AlertEvents.Missed or AlertEvents.NoServer)) f.Add(("Run", e.RunId.ToString(CultureInfo.InvariantCulture)));
+        if (e.EventType is not (AlertEvents.Missed or AlertEvents.NoServer or AlertEvents.CertExpiring)) f.Add(("Run", e.RunId.ToString(CultureInfo.InvariantCulture)));
         if (e.StartedAtUtc is { } s) f.Add(("Started (UTC)", s.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)));
         if (e.FinishedAtUtc is { } fin) f.Add(("Finished (UTC)", fin.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)));
         if (e.StartedAtUtc is { } s2 && e.FinishedAtUtc is { } f2) f.Add(("Duration", $"{(f2 - s2).TotalSeconds:N1} s"));

@@ -41,10 +41,14 @@ public static class AlertEvents
     public const string Recovered = "Recovered";
     public const string Missed = "Missed";
     public const string NoServer = "NoServer";
+    public const string CertExpiring = "CertExpiring";
 
-    public static readonly string[] All = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed, NoServer];
+    public static readonly string[] All = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed, NoServer, CertExpiring];
     public static readonly string[] Problems = [Failed, PartiallyFailed, Abandoned, CleanupPending];
-    public const string DefaultChannelStatuses = "Failed,PartiallyFailed,Abandoned,CleanupPending,Missed,NoServer";
+    public const string DefaultChannelStatuses = "Failed,PartiallyFailed,Abandoned,CleanupPending,Missed,NoServer,CertExpiring";
+
+    /// <summary>The HTTPS certificate is reported this many days before it expires (once a day).</summary>
+    public const int CertWarningDays = 30;
 
     /// <summary>Events sent to a job's own NotifyEmails.</summary>
     public static readonly string[] JobRecipients = [Failed, PartiallyFailed, Abandoned, CleanupPending, Recovered, Missed];
@@ -55,8 +59,15 @@ public static class AlertEvents
         CleanupPending => "cleanup pending",
         Missed => "did not run as scheduled",
         NoServer => "no Hangfire server listening",
+        CertExpiring => "HTTPS certificate expires soon",
         _ => e.ToLowerInvariant()
     };
+}
+
+/// <summary>Implemented by the Web host when it serves HTTPS: the current server certificate, for expiry alerts.</summary>
+public interface ICertificateStatus
+{
+    (string Subject, DateTime NotAfterUtc)? Current { get; }
 }
 
 public sealed class AlertChannelDef

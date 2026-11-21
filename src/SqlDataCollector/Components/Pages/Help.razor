@@ -32,6 +32,9 @@
         <section id="quick-start">
             <h2>Quick start</h2>
             <ol>
+                <li><b>First sign-in</b> (after the installation, on the server itself): <i>Local administrator</i> asks for a new password – there is no default password.
+                    The form is only offered on <code>https://localhost</code>, so nobody on the network can set it first.</li>
+                <li><b>Settings</b>: upload the Google Cloud Storage service account key; import your HTTPS certificate (.pfx/.p12 or from the Windows store) instead of the self-signed one.</li>
                 <li><b>Servers</b> (Admin): add your source and target SQL Servers and click <i>Test</i>. Connections use the application's service account.</li>
                 <li><b>Permissions</b> (Admin): give AD groups a role, and tell which servers/databases Editors may use as source or target.</li>
                 <li><b>Extract Jobs → New job</b>: pick the source server, database and table(s) → <i>Preview</i> → pick the target → <i>Check target</i> → choose the load mode and retention → choose a schedule → <i>Save</i>.</li>
@@ -201,8 +204,13 @@
 
         <section id="gcs">
             <h2>GCS settings and object names</h2>
-            <p>Authentication is configured on the Worker: <code>Gcs:CredentialsPath</code> (service account JSON) or Application Default Credentials.
-               The service account needs <code>roles/storage.objectCreator</code> on the bucket.</p>
+            <p>No Google tools are needed on the servers (the client library is part of the application); the export Worker needs outbound HTTPS to
+               <code>storage.googleapis.com</code> and <code>oauth2.googleapis.com</code>. Create a <b>service account</b> in Google Cloud with
+               <i>Storage Object Creator</i> (<code>roles/storage.objectCreator</code>) on the bucket – an API key cannot write to GCS. The bucket must exist.</p>
+            <p>Credential, in this order: <code>Gcs:CredentialsPath</code> (a JSON key file in appsettings) → the <b>key uploaded on Settings → Google Cloud Storage
+               credential</b> (stored AES-256 encrypted in the metadata database with <code>Secrets:Key</code>, so every Worker uses it; only the service account e-mail is shown)
+               → Application Default Credentials (e.g. keyless Workload Identity Federation via <code>GOOGLE_APPLICATION_CREDENTIALS</code>).
+               <i>Test connection</i> gets an access token and can write a small object <code>_sdc_connection_test/&lt;machine&gt;.txt</code> to a bucket.</p>
             <table class="table table-sm table-bordered bg-white mono">
                 <thead class="table-light"><tr><th>Token</th><th>Value</th></tr></thead>
                 <tbody>
@@ -283,6 +291,37 @@
                 <li>Not managed by the application: GCS objects (use a bucket lifecycle rule), the export Worker's local archive (<code>KeepLocalFiles</code>, <code>LocalFileRetentionDays</code>
                     in its appsettings) and Hangfire's own job history. Connections, roles/queues, folders and security settings (e.g. <code>ExportReadAsUser</code>) stay in appsettings.</li>
             </ul>
+        </section>
+
+        <section id="https">
+            <h2>HTTPS certificate</h2>
+            <p>With <code>Https:Port</code> set (the installer uses 443) the application serves HTTPS itself (Kestrel, no IIS). Without a certificate it creates a
+               <b>self-signed</b> one for <code>Https:HostName</code>, the machine name and <code>localhost</code> (2 years) – browsers warn until you replace it.</p>
+            <ul>
+                <li><i>Settings → HTTPS certificate</i> (Admin): import a <b>PKCS#12</b> file (<code>.pfx</code>/<code>.p12</code> with private key and its password) or pick a
+                    certificate of the Windows store <code>LocalMachine\My</code> (the service account needs read access to its private key: certlm.msc → Manage Private Keys).</li>
+                <li>The new certificate applies to new connections immediately – no restart. An imported file is stored DPAPI-protected in <code>Https:CertificateDirectory</code>
+                    (default <code>%ProgramData%\SqlDataCollector\certs</code>), never in the database.</li>
+                <li>The certificate must be valid for server authentication and not expired. 30 days before expiry the Status page warns and the <i>CertExpiring</i> alert is sent daily.</li>
+                <li>Windows authentication needs HTTP/1.1; the HTTPS endpoint is HTTP/1.1 only. For Kerberos register <code>setspn -S HTTP/&lt;host&gt; &lt;service account&gt;</code>.</li>
+            </ul>
+        </section>
+
+        <section id="installation">
+            <h2>Installation (SqlDataCollector-Setup.exe)</h2>
+            <p>One self-contained file: application, .NET runtime and wizard – nothing else has to be installed on the server (SQL Server is separate).
+               The server must be joined to the AD domain; the service always runs as a domain account (or gMSA).</p>
+            <ol>
+                <li><b>Mode</b>: Embedded (one server, Hangfire in the metadata database) or Central (the organization's Hangfire database; Web and/or Worker on this server).</li>
+                <li><b>Service account</b>: verified against the domain and given "Log on as a service".</li>
+                <li><b>Databases</b>: <i>create now</i> with the installing user's Windows account (databases, etl schema, permissions, export reader), or <i>later</i>:
+                    the scripts are written to <code>&lt;program folder&gt;\sql</code> for the DBA. Central Hangfire: <code>03_hangfire_central.sql</code> is always for the DBA.
+                    Until the metadata database is ready the application shows a <i>setup required</i> page and restarts itself as soon as it is.</li>
+                <li><b>Web</b>: host name and HTTPS port, self-signed certificate, firewall rule; program and data folder (certificate, temporary CSV files).</li>
+                <li>The service starts; <i>Open SqlDataCollector</i> opens <code>https://localhost/login</code> for the first sign-in.</li>
+            </ol>
+            <p>Silent: <code>SqlDataCollector-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]</code>. Uninstall: Apps &amp; features,
+               or <code>/uninstall [/purge]</code> (databases and, without /purge, the data folder are kept). Running the setup again upgrades the binaries and keeps the configuration.</p>
         </section>
 
         <section id="alerts">
@@ -383,7 +422,7 @@
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "CSV format"),
         ("cron", "Scheduling (cron)"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
-        ("settings", "Settings: retention and cleanup"), ("alerts", "Alerts"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
+        ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
     ];
 }

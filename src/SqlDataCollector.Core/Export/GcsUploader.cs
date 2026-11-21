@@ -8,37 +8,60 @@ using SqlDataCollector.Options;
 namespace SqlDataCollector.Export;
 
 /// <summary>Resumable upload to Google Cloud Storage with retries and size verification.</summary>
-public sealed class GcsUploader(IOptions<GcsOptions> options, ILogger<GcsUploader> logger) : IDisposable
+public sealed class GcsUploader(IOptions<GcsOptions> options, GcsCredentialStore credentials, ILogger<GcsUploader> logger) : IDisposable
 {
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private StorageClient? _client;
+    private string? _clientVersion;
 
+    /// <summary>The client is rebuilt when the credential changes (e.g. a new key uploaded on the Settings page).</summary>
     private async Task<StorageClient> GetClientAsync(CancellationToken ct)
     {
-        if (_client is not null) return _client;
+        var version = await credentials.GetVersionAsync();
+        if (_client is not null && _clientVersion == version) return _client;
         await _initLock.WaitAsync(ct);
         try
         {
-            if (_client is not null) return _client;
+            if (_client is not null && _clientVersion == version) return _client;
             var o = options.Value;
             var builder = new StorageClientBuilder();
             if (!string.IsNullOrWhiteSpace(o.Endpoint))
                 builder.BaseUri = o.Endpoint.TrimEnd('/') + "/storage/v1/";
 
-            if (o.Anonymous)
-                builder.UnauthenticatedAccess = true;
-            else if (!string.IsNullOrWhiteSpace(o.CredentialsPath))
-                builder.GoogleCredential = (await CredentialFactory.FromFileAsync<ServiceAccountCredential>(o.CredentialsPath, ct)).ToGoogleCredential();
-            else
-                builder.GoogleCredential = await GoogleCredential.GetApplicationDefaultAsync(ct);
+            var credential = await credentials.ResolveAsync(ct);
+            if (credential is null) builder.UnauthenticatedAccess = true;
+            else builder.GoogleCredential = credential;
 
+            var old = _client;
             _client = await builder.BuildAsync(ct);
+            _clientVersion = version;
+            old?.Dispose();
             return _client;
         }
         finally
         {
             _initLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Settings page "Test": obtains an access token with the current credential and, if a bucket is given, writes a small
+    /// object _sdc_connection_test/&lt;machine&gt;.txt (needs only Storage Object Creator).
+    /// </summary>
+    public async Task<string> TestAsync(string? bucket, CancellationToken ct)
+    {
+        var credential = await credentials.ResolveAsync(ct);
+        var result = "Unauthenticated access (emulator).";
+        if (credential is not null)
+        {
+            var token = await ((ITokenAccess)credential.CreateScoped(GcsCredentialStore.StorageScope)).GetAccessTokenForRequestAsync(cancellationToken: ct);
+            if (string.IsNullOrEmpty(token)) throw new InvalidOperationException("No access token was returned.");
+            result = "Access token obtained.";
+        }
+        if (string.IsNullOrWhiteSpace(bucket)) return result;
+        var name = $"_sdc_connection_test/{Environment.MachineName}.txt";
+        await UploadTextAsync(bucket.Trim(), name, $"SqlDataCollector connection test {DateTime.UtcNow:O}", "text/plain", ct);
+        return $"{result} Test object written: gs://{bucket.Trim()}/{name}";
     }
 
     public async Task<long> UploadFileAsync(string bucket, string objectName, string localPath, string contentType, CancellationToken ct)

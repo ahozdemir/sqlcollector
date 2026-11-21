@@ -43,6 +43,7 @@ x-app-env: &app-env
   Gcs__CredentialsPath: ""
   Collector__WorkDirectory: /exports
   Collector__SyncCron: "*/2 * * * *"
+  Secrets__Key: "ZGV2LW9ubHktc2VjcmV0LWtleS1kby1ub3QtdXNlISE="   # dev only (32 bytes); all containers share it
 
 services:
   # ---------------------------------------------------------------- demo sources

@@ -125,6 +125,33 @@ achieved with an export-only Worker on that host (see Architecture) – no `xp_c
 
 ## 4. Installation
 
+### 4.0 Installer (recommended)
+```powershell
+.\scripts\dev.ps1 installer        # -> artifacts\installer\dist\SqlDataCollector-Setup.exe
+```
+`SqlDataCollector-Setup.exe` is one self-contained file (application + .NET runtime + wizard): nothing has to be installed on
+the server except an existing SQL Server. Requirements: Windows Server joined to the AD domain, a domain service account
+(or gMSA). The wizard asks, in this order:
+
+1. **Mode** – *Embedded* (one server, Hangfire in the metadata DB) or *Central* (organization's Hangfire DB; Web and/or Worker on this server).
+2. **Service account** – verified against the domain; gets "Log on as a service"; the service runs as this account.
+3. **Databases** – *create now* with the installing user's Windows account (databases, etl schema, permissions, `sdc_export_reader`),
+   or *later*: scripts in `<program folder>\sql` for the DBA (`01_databases_and_permissions.sql`, `02_etl_schema.sql`,
+   central: `03_hangfire_central.sql`). Until the metadata DB is ready the app serves a *setup required* page and restarts itself once it is.
+4. **Web and HTTPS** – host name, port (443), self-signed certificate, firewall rule, program and data folder
+   (`%ProgramData%\SqlDataCollector`: `certs\`, `exports\` = temporary CSV files / archive).
+
+The service is registered (automatic delayed start, restart on failure) and started; *Open SqlDataCollector* opens
+`https://localhost/login`. **First sign-in** (only possible on the server itself): *Local administrator* asks for a new
+password – there is no default. Then: grant roles to AD groups (*Permissions*), upload the GCS service account key and
+import the corporate HTTPS certificate (*Settings*). Kerberos: `setspn -S HTTP/<host> <service account>`.
+
+Silent installation: `SqlDataCollector-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]`
+(the JSON has the wizard's fields, e.g. `{"Mode":"Embedded","ServiceAccount":"CORP\\svc-sdc","SqlServer":"sql01","MetadataDb":"SdcMeta","DwhDb":"DWH","DatabaseAction":"Now","HostName":"sdc.corp.local"}`).
+Running the setup again upgrades the binaries and keeps the configuration. Uninstall: *Apps & features* or `/uninstall [/purge]`.
+
+Manual installation (below) remains possible.
+
 ### 4.1 Build
 ```powershell
 dotnet publish src/SqlDataCollector -c Release -r win-x64 --self-contained false -o D:\SqlDataCollector\app
@@ -190,8 +217,10 @@ With a gMSA (`…$`) no password is entered.
 | `Collector:ExportReadAsUser` | Read-only database user export reads switch to (default `sdc_export_reader`; empty = off, not recommended) |
 | `Alerts:Smtp:Host` / `Port` / `Security` / `From` / `UserName` / `Password` | SMTP for e-mail alerts (internal relay recommended; `Security`: Auto, None, StartTls, SslOnConnect) |
 | `Alerts:PublicUrl` | Base URL of the UI for links in alerts |
+| `Https:Port` / `HttpRedirectPort` / `HostName` / `CertificateDirectory` | HTTPS served by Kestrel (0 = off, Urls used); self-signed certificate until one is imported on Settings |
+| `Secrets:Key` | AES-256 key (base64, 32 bytes) for secrets stored in the metadata DB (GCS key); the same on all servers of an installation |
 | `Collector:RetentionCron` / `RunLogRetentionDays` | Initial values only: once saved on **Settings**, the values in `etl.SystemSetting` win |
-| `Gcs:CredentialsPath` | Service account JSON; empty = Application Default Credentials (needs `roles/storage.objectCreator`) |
+| `Gcs:CredentialsPath` | Optional service account JSON file; empty = the key uploaded on Settings, else Application Default Credentials (needs `roles/storage.objectCreator`) |
 | `Gcs:Endpoint` | Optional (Private Service Connect / emulator) |
 | `SqlCredentialOverrides:<ServerName>` | **Only** for non-domain servers or tests (`User ID=..;Password=..`); normally empty |
 
@@ -230,6 +259,10 @@ SqlDataCollector.exe hangfire-install-script [schema] [accounts…] > x.sql  # D
 SqlDataCollector.exe hangfire-install "<connection string>" [schema]       # install Hangfire tables directly
 SqlDataCollector.exe metadata-install "<connection string>"                # install/upgrade the etl.* schema
 SqlDataCollector.exe run-job extract|export <id|all>                       # run job(s) in-process now (exit code 0 = OK)
+SqlDataCollector.exe create-cert --host sdc.corp.local [--dir <folder>]      # self-signed HTTPS certificate (installer)
+SqlDataCollector.exe db-script --meta M --dwh D [--account DOMAIN\svc] [--central --hangfire-db H] --out <folder>   # DBA scripts
+SqlDataCollector.exe db-install --server S --meta M --dwh D [--account DOMAIN\svc] [--trust-server-certificate]   # run them (current Windows account)
+SqlDataCollector.exe new-secret-key                                         # value for Secrets:Key
 ```
 
 ---

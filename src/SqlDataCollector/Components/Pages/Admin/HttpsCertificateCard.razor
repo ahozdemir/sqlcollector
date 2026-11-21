@@ -1,0 +1,110 @@
+@using Microsoft.AspNetCore.Components.Forms
+@inject CertificateManager Certificates
+@inject MetadataRepository Repo
+@inject AccessService Access
+
+<div class="card mb-4"><div class="card-body">
+    <div class="section-title mb-2">HTTPS certificate <HelpLink Topic="https" Title="HTTPS certificate" /></div>
+    @if (!Certificates.Enabled)
+    {
+        <div class="small text-muted">HTTPS is not enabled for this process (<span class="mono">Https:Port</span> is 0; the address comes from <span class="mono">Urls</span>).
+            The installer enables it on port 443 with a self-signed certificate.</div>
+    }
+    else
+    {
+        @if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2 small">@error</div> }
+        @if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2 small">@info</div> }
+        @if (current is not null)
+        {
+            <table class="table table-sm small mb-3">
+                <tr><td class="text-muted" style="width:160px">Subject</td><td class="mono">@current.Subject</td></tr>
+                <tr><td class="text-muted">Names</td><td class="mono">@string.Join(", ", current.DnsNames)</td></tr>
+                <tr><td class="text-muted">Issuer</td><td class="mono">@current.Issuer @if (current.SelfSigned) { <span class="badge bg-warning text-dark ms-1">self-signed</span> }</td></tr>
+                <tr><td class="text-muted">Valid until</td><td>@current.NotAfterUtc.ToString("yyyy-MM-dd") <span class="@(current.DaysLeft <= 30 ? "text-danger fw-bold" : "text-muted")">(@current.DaysLeft days)</span></td></tr>
+                <tr><td class="text-muted">Source</td><td>@current.Source · <span class="mono">@current.Thumbprint</span></td></tr>
+            </table>
+            @if (current.SelfSigned)
+            {
+                <div class="small text-muted mb-3">Browsers show a warning for a self-signed certificate. Import a certificate issued by your corporate CA for
+                    <span class="mono">@Certificates.DefaultHostName</span>.</div>
+            }
+        }
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="small fw-semibold mb-1">Import a PKCS#12 file (.pfx / .p12)</div>
+                <InputFile OnChange="FileChosen" accept=".pfx,.p12" class="form-control form-control-sm mb-2" />
+                <input type="password" class="form-control form-control-sm mb-2" placeholder="Password of the file" @bind="pfxPassword" autocomplete="off" />
+                <button class="btn btn-sm btn-primary" @onclick="ImportAsync" disabled="@(pfx is null || busy)">Import and use</button>
+            </div>
+            <div class="col-md-6">
+                <div class="small fw-semibold mb-1">Use a certificate of the Windows store (LocalMachine\My)</div>
+                @if (storeCerts.Count == 0) { <div class="small text-muted">No valid server certificate with a private key found.</div> }
+                else
+                {
+                    <select class="form-select form-select-sm mb-2" @bind="selectedThumbprint">
+                        <option value="">Choose…</option>
+                        @foreach (var c in storeCerts) { <option value="@c.Thumbprint">@c.Subject – until @c.NotAfterUtc.ToString("yyyy-MM-dd")</option> }
+                    </select>
+                    <button class="btn btn-sm btn-primary" @onclick="UseStoreAsync" disabled="@(string.IsNullOrEmpty(selectedThumbprint) || busy)">Use selected</button>
+                }
+                <div class="mt-3">
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="SelfSignedAsync" disabled="@busy">Create a new self-signed certificate</button>
+                </div>
+            </div>
+        </div>
+        <div class="small text-muted mt-2">The new certificate is used immediately for new connections (no restart). An imported file is stored protected (DPAPI) in
+            <span class="mono">@Certificates.Directory</span>.</div>
+    }
+</div></div>
+
+@code {
+    private CertificateInfo? current;
+    private IReadOnlyList<CertificateInfo> storeCerts = [];
+    private byte[]? pfx;
+    private string? pfxName;
+    private string? pfxPassword;
+    private string? selectedThumbprint;
+    private string? error, info;
+    private bool busy;
+
+    protected override void OnInitialized() => Refresh();
+
+    private void Refresh()
+    {
+        if (!Certificates.Enabled) return;
+        try { current = Certificates.Info; storeCerts = Certificates.ListStoreCertificates(); }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task FileChosen(InputFileChangeEventArgs e)
+    {
+        error = null;
+        try
+        {
+            await using var s = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
+            using var ms = new MemoryStream();
+            await s.CopyToAsync(ms);
+            pfx = ms.ToArray();
+            pfxName = e.File.Name;
+        }
+        catch (Exception ex) { error = ex.Message; pfx = null; }
+    }
+
+    private Task ImportAsync() => RunAsync("ImportPfx", pfxName, () => Certificates.ImportPfx(pfx!, string.IsNullOrEmpty(pfxPassword) ? null : pfxPassword));
+    private Task UseStoreAsync() => RunAsync("UseStore", selectedThumbprint, () => Certificates.UseStoreCertificate(selectedThumbprint!));
+    private Task SelfSignedAsync() => RunAsync("SelfSigned", Certificates.DefaultHostName, () => Certificates.CreateAndUseSelfSigned(Certificates.DefaultHostName));
+
+    private async Task RunAsync(string action, string? detail, Func<CertificateInfo> work)
+    {
+        busy = true; error = null; info = null;
+        try
+        {
+            var c = work();
+            await Repo.AuditAsync(await Access.UserNameAsync(), action, "HttpsCertificate", c.Thumbprint, new { c.Subject, NotAfter = c.NotAfterUtc, source = detail });
+            info = $"Now serving {c.Subject} (valid until {c.NotAfterUtc:yyyy-MM-dd}).";
+            pfx = null; pfxPassword = null;
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { busy = false; Refresh(); }
+    }
+}

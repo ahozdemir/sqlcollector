@@ -665,6 +665,17 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
         await AuditAsync(user, "Update", "SystemSetting", null, values);
     }
 
+    /// <summary>Stores one setting whose value must not appear in the audit log (e.g. a password hash); the change itself is audited.</summary>
+    public async Task SaveSecretSettingAsync(string name, string? value, string user, string auditEntity)
+    {
+        await using var c = Conn();
+        await c.ExecuteAsync("""
+            UPDATE etl.SystemSetting SET Value = @value, ModifiedBy = @user, ModifiedAtUtc = SYSUTCDATETIME() WHERE Name = @name;
+            IF @@ROWCOUNT = 0 INSERT etl.SystemSetting (Name, Value, ModifiedBy) VALUES (@name, @value, @user);
+            """, new { name, value, user });
+        await AuditAsync(user, "Update", auditEntity, name, null);
+    }
+
     // ================================================================ permission checks
 
     /// <summary>Replaces the latest check result of one process (role + queue + host) (older results are purged by retention).</summary>

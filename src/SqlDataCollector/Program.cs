@@ -72,6 +72,64 @@ if (args.Length > 1 && args[0] == "metadata-install")
     return 0;
 }
 
+// ---- Installer helper commands ----
+//   SqlDataCollector.exe create-cert --host sdc.corp.local [--dir C:\ProgramData\SqlDataCollector\certs]
+//   SqlDataCollector.exe db-script --meta SdcMeta --dwh DWH [--account DOMAIN\svc] [--central --hangfire-db HangfireDB --hangfire-schema s] --out <dir>
+//   SqlDataCollector.exe db-install --server <sql> --meta SdcMeta --dwh DWH [--account DOMAIN\svc] [--trust-server-certificate]   (current Windows account)
+//   SqlDataCollector.exe new-secret-key
+if (args.Length > 0 && args[0] is "create-cert" or "db-script" or "db-install" or "new-secret-key")
+{
+    string? Arg(string name) { var i = Array.IndexOf(args, "--" + name); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
+    bool Flag(string name) => args.Contains("--" + name);
+    try
+    {
+        switch (args[0])
+        {
+            case "new-secret-key":
+                Console.WriteLine(SecretProtector.NewKey());
+                return 0;
+            case "create-cert":
+            {
+                var host = Arg("host") ?? Environment.MachineName.ToLowerInvariant();
+                var certs = new CertificateManager(new HttpsOptions { Port = 443, HostName = host, CertificateDirectory = Arg("dir") });
+                var c = certs.CreateAndUseSelfSigned(host);
+                Console.WriteLine($"Self-signed certificate created in {certs.Directory}: {c.Subject}, {string.Join(", ", c.DnsNames)}, valid until {c.NotAfterUtc:yyyy-MM-dd}, thumbprint {c.Thumbprint}");
+                return 0;
+            }
+            case "db-script":
+            {
+                var o = new DbSetupOptions(Arg("meta") ?? "", Arg("dwh") ?? "", Arg("account"), Flag("central"), Arg("hangfire-db"), Arg("hangfire-schema") ?? "hangfire_collector");
+                var dir = Arg("out") ?? throw new ArgumentException("--out <folder> is required.");
+                Directory.CreateDirectory(dir);
+                foreach (var (file, sql) in DbSetup.Scripts(o))
+                {
+                    File.WriteAllText(Path.Combine(dir, file), sql);
+                    Console.WriteLine($"Written: {Path.Combine(dir, file)}");
+                }
+                return 0;
+            }
+            case "db-install":
+            {
+                var o = new DbSetupOptions(Arg("meta") ?? "", Arg("dwh") ?? "", Arg("account"));
+                var cs = new SqlConnectionStringBuilder
+                {
+                    DataSource = Arg("server") ?? throw new ArgumentException("--server is required."),
+                    IntegratedSecurity = true, TrustServerCertificate = Flag("trust-server-certificate"), ConnectTimeout = 30,
+                    ApplicationName = "SqlDataCollector-Setup"
+                };
+                await DbSetup.InstallAsync(cs.ConnectionString, o, Console.WriteLine, CancellationToken.None);
+                return 0;
+            }
+        }
+    }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or SqlException or IOException or UnauthorizedAccessException
+                               or System.Security.Cryptography.CryptographicException or PlatformNotSupportedException)
+    {
+        Console.Error.WriteLine($"{args[0]} failed: {ex.Message}");
+        return 1;
+    }
+}
+
 // ---- Helper command: run jobs in-process, without Hangfire (local testing / debugging) ----
 //   SqlDataCollector.exe run-job extract <id|all>     SqlDataCollector.exe run-job export <id|all>
 //   Uses the normal configuration (appsettings.json + appsettings.{ASPNETCORE_ENVIRONMENT}.json + environment).
@@ -127,6 +185,39 @@ if (builder.Environment.IsEnvironment("LocalTest")) builder.WebHost.UseStaticWeb
 var collector = builder.Configuration.GetSection(CollectorOptions.Section).Get<CollectorOptions>() ?? new();
 var dashboard = builder.Configuration.GetSection(DashboardSettings.Section).Get<DashboardSettings>() ?? new();
 
+// HTTPS (Https:Port > 0): Kestrel serves the certificate of the CertificateManager (self-signed until one is imported on Settings)
+var httpsOptions = builder.Configuration.GetSection(HttpsOptions.Section).Get<HttpsOptions>() ?? new();
+var certificates = new CertificateManager(httpsOptions);
+if (collector.IsWeb && certificates.Enabled)
+{
+    var cert = certificates.EnsureCertificate();
+    Console.WriteLine($"HTTPS on port {httpsOptions.Port}: {cert.Subject}, valid until {cert.NotAfterUtc:yyyy-MM-dd}{(cert.SelfSigned ? " (self-signed)" : "")}");
+    builder.WebHost.ConfigureKestrel(k =>
+    {
+        k.ListenAnyIP(httpsOptions.Port, lo =>
+        {
+            lo.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1;   // Windows authentication does not work over HTTP/2
+            lo.UseHttps(h => h.ServerCertificateSelector = (_, _) => certificates.Current);
+        });
+        if (httpsOptions.HttpRedirectPort > 0) k.ListenAnyIP(httpsOptions.HttpRedirectPort);
+    });
+    if (httpsOptions.HttpRedirectPort > 0) builder.Services.AddHttpsRedirection(o => o.HttpsPort = httpsOptions.Port);
+}
+builder.Services.AddSingleton(certificates);
+if (certificates.Enabled) builder.Services.AddSingleton<SqlDataCollector.Alerts.ICertificateStatus>(certificates);
+
+// The metadata database must be reachable before Hangfire and the job services start. If it is not (e.g. the installer's
+// "create the databases later" option), the Web role serves a page that explains what to do; a Worker exits and is restarted.
+if (await SetupProbe.ProbeAsync(builder.Configuration, collector) is { } setupProblem)
+{
+    Console.Error.WriteLine($"Database not ready: {setupProblem}");
+    if (!collector.IsWeb) return 3;
+    var setupApp = builder.Build();
+    SetupProbe.MapSetupRequiredPage(setupApp, setupProblem, builder.Configuration, collector);
+    await setupApp.RunAsync();
+    return 0;
+}
+
 builder.Services.Configure<LocalAdminOptions>(builder.Configuration.GetSection(LocalAdminOptions.Section));
 
 // Job code and services (SqlDataCollector.Core). The same call is used by an organization's existing
@@ -176,6 +267,7 @@ if (collector.IsWeb)
     builder.Services.AddRazorComponents().AddInteractiveServerComponents();
     builder.Services.AddSingleton<PrincipalBuilder>();
     builder.Services.AddSingleton<LoginThrottle>();
+    builder.Services.AddSingleton<LocalAdminStore>();
     builder.Services.AddScoped<AccessService>();
     // Job failure alerts: dispatched by the Web role, independent of Hangfire Workers (reports missing Workers too)
     builder.Services.AddHostedService<SqlDataCollector.Alerts.AlertBackgroundService>();
@@ -187,6 +279,7 @@ SqlDataCollector.Components.Shared.Ui.Tz = TimeZones.Resolve(collector.SystemTim
 if (collector.IsWeb)
 {
     if (!app.Environment.IsDevelopment()) app.UseExceptionHandler("/error", createScopeForErrors: true);
+    if (certificates.Enabled && httpsOptions.HttpRedirectPort > 0) app.UseHttpsRedirection();
     app.UseStatusCodePagesWithReExecute("/not-found");
     app.MapStaticAssets();
     app.UseAuthentication();

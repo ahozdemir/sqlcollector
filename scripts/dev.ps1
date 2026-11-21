@@ -24,7 +24,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('setup', 'up', 'reseed', 'reset-local', 'run', 'run-job', 'smoke', 'simulate', 'gcs-ls', 'gcs-get',
-                 'test', 'test-unit', 'test-integration', 'full-up', 'shared-up', 'down', 'status', 'logs', 'help')]
+                 'test', 'test-unit', 'test-integration', 'full-up', 'shared-up', 'down', 'status', 'logs', 'installer', 'help')]
     [string]$Command = 'help',
 
     [Parameter(Position = 1)]
@@ -158,6 +158,10 @@ ALTER ROLE db_datareader ADD MEMBER [sdc_export_reader];
     Write-Step "Writing $LocalSettings"
     $overrides = [ordered]@{ ERP = "User ID=sa;Password=$SaPassword"; CRM = "User ID=sa;Password=$SaPassword" }
     if ($SqlUser) { $overrides['DWH'] = "User ID=$SqlUser;Password=$SqlPassword" }
+    # keep the secret key of an existing local configuration (stored secrets stay readable)
+    $secretKey = $null
+    if (Test-Path $LocalSettings) { try { $secretKey = (Get-Content $LocalSettings -Raw | ConvertFrom-Json).Secrets.Key } catch { } }
+    if (-not $secretKey) { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $secretKey = [Convert]::ToBase64String($b) }
     $settings = [ordered]@{
         Urls              = 'http://localhost:5080'
         ConnectionStrings = [ordered]@{ Metadata = $meta; Hangfire = '' }   # empty Hangfire = embedded (tables in the metadata DB)
@@ -170,6 +174,7 @@ ALTER ROLE db_datareader ADD MEMBER [sdc_export_reader];
         LocalAdmin        = [ordered]@{ Enabled = $true; Username = 'admin'; PasswordHash = $DevAdminHash }
         Gcs               = [ordered]@{ Endpoint = $GcsUrl; Anonymous = $true; CredentialsPath = '' }
         Alerts            = [ordered]@{ PublicUrl = 'http://localhost:5080'; Smtp = [ordered]@{ Host = 'localhost'; Port = 1025; Security = 'None'; From = 'sqldatacollector@localhost' } }   # mailpit: http://localhost:8025
+        Secrets           = [ordered]@{ Key = $secretKey }
         SqlCredentialOverrides = $overrides
         Logging           = [ordered]@{ LogLevel = [ordered]@{ Default = 'Information'; 'Microsoft.AspNetCore' = 'Warning'; Hangfire = 'Information' } }
     }
@@ -196,6 +201,25 @@ IF DB_ID(N'$DwhDb') IS NOT NULL BEGIN ALTER DATABASE [$DwhDb] SET SINGLE_USER WI
     'run' {
         if (-not (Test-Path $LocalSettings)) { throw 'Run ".\scripts\dev.ps1 setup" first.' }
         & dotnet run --project $AppProject --launch-profile LocalTest
+    }
+    'installer' {
+        # artifacts\installer\SqlDataCollector-Setup.exe: one self-contained file (application + .NET runtime + wizard)
+        $out = Join-Path $Root 'artifacts/installer'
+        $app = Join-Path $out 'app'
+        $zip = Join-Path $out 'payload.zip'
+        if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+        Write-Step 'Publishing the application (self-contained, win-x64)'
+        & dotnet publish $AppProject -c Release -r win-x64 --self-contained true -p:PublishReadyToRun=false -o $app
+        if ($LASTEXITCODE -ne 0) { throw 'dotnet publish of the application failed' }
+        Remove-Item (Join-Path $app 'appsettings.LocalTest.json') -ErrorAction SilentlyContinue   # never ship the developer configuration
+        Write-Step 'Packing payload.zip'
+        Compress-Archive -Path (Join-Path $app '*') -DestinationPath $zip -CompressionLevel Optimal
+        Write-Step 'Publishing SqlDataCollector-Setup.exe (single file, self-contained, payload embedded)'
+        & dotnet publish (Join-Path $Root 'installer/SqlDataCollector.Setup') -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:PayloadZip=$zip" -o (Join-Path $out 'dist')
+        if ($LASTEXITCODE -ne 0) { throw 'dotnet publish of the setup failed' }
+        $exe = Get-Item (Join-Path $out 'dist/SqlDataCollector-Setup.exe')
+        Write-Host ("Ready: {0} ({1:N0} MB)" -f $exe.FullName, ($exe.Length / 1MB)) -ForegroundColor Green
     }
     'run-job' {
         if (-not $Arg) { throw "Usage: .\scripts\dev.ps1 run-job 'extract all' | 'extract <id>' | 'export all' | 'export <id>'" }
