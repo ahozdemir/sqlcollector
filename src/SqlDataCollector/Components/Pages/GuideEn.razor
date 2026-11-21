@@ -1,0 +1,213 @@
+@* English guide: scenario by scenario, why and how. Scenario ids are the same as in GuideTr.razor.
+   Screenshots: wwwroot/guide/*.png (regenerate with scripts/guide-screenshots.ps1). *@
+
+<section id="first-steps">
+    <h2>First steps after the installation</h2>
+    <p class="guide-meta">Who: Admin · Time: 15 minutes · Done once</p>
+    <p><b>Why?</b> After the installation no server, user or cloud connection is defined. These steps are the base of every other scenario, and the order matters:
+       each step builds on the previous one.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li><b>Set the administrator password.</b> On the server itself open <code>https://localhost</code>, click <b>Local administrator</b> and choose a new password.
+            <GuideFigure Src="guide/login.png" Caption="Sign-in: corporate users sign in with Windows (AD); the local administrator is for the first setup." />
+        </li>
+        <li><b>Upload the Google Cloud key.</b> In <b>Settings → Google Cloud Storage credential</b> choose the service account's JSON key and click <b>Save key</b>,
+            then enter a bucket name and click <b>Test connection</b>.
+            <GuideFigure Src="guide/settings-gcs.png" Caption="GCS key on the Settings page: stored encrypted; only the service account's name is shown." />
+        </li>
+        <li><b>Import the corporate HTTPS certificate</b> (<b>Settings → HTTPS certificate</b>). Browsers warn about the temporary certificate of the installation.</li>
+        <li><b>Add the servers</b> (<b>Servers</b>): the source SQL Servers (read from) and the target SQL Server (DWH); click <b>Test</b> for each.</li>
+        <li><b>Check permissions:</b> <b>Check permissions</b> on the <b>Servers</b> page compares the service accounts' rights with what they need.</li>
+        <li><b>Give people roles</b> (see <a href="/guide#access">Give people access</a>).</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Give roles to AD groups (e.g. <i>DWH-Editors</i>) rather than to individuals: access follows group membership automatically.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> The local administrator is for the first setup and emergencies only; keep its password safe. Everyday work uses Windows accounts.</div>
+    <p><b>How do I check?</b> The <b>Status</b> page shows at least one worker online, and the permission check has no red (<i>Missing</i>) rows.</p>
+    <p class="small">Reference: <a href="/help#installation">Installation</a> · <a href="/help#https">HTTPS certificate</a> · <a href="/help#gcs">GCS settings</a> · <a href="/help#servers">Servers and service accounts</a> · <a href="/help#permission-check">Permission check</a></p>
+</section>
+
+<section id="nightly-table">
+    <h2>Copy a table to the DWH every night</h2>
+    <p class="guide-meta">Who: Editor · Time: 5 minutes</p>
+    <p><b>Why?</b> Reports and analyses run on the copy in the DWH instead of loading the operational systems (ERP, CRM). A nightly copy can be queried fast and safely during the day.</p>
+    <p><b>Before you start:</b> the source and target servers exist on <b>Servers</b> and you are permitted to use the databases.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li><b>Extract Jobs → + New job</b>. Choose <b>Source server</b> and <b>Source database</b> and tick the table; the columns are selected automatically.
+            <b>Preview</b> shows the first 50 rows.
+            <GuideFigure Src="guide/extract-source.png" Caption="1 · Source: server, database and table. 'Read a consistent snapshot' is recommended for busy sources." />
+        </li>
+        <li><b>Choose the target.</b> Pick <b>Target server</b> and <b>Target database</b>. The schema is filled from the source name (ERP → <code>erp</code>) and the table keeps the source name.
+            <b>Check target</b> shows differences if the table exists; otherwise it is created on the first run.</li>
+        <li><b>Choose the load mode</b> – the main decision:
+            <ul>
+                <li>Only the <b>current state</b> is needed: <b>Replace</b> for small tables, <b>Merge</b> for large ones.</li>
+                <li>A <b>snapshot of every day</b> (e.g. stock levels): <b>Append</b> with a <b>Retention</b>.</li>
+            </ul>
+            <GuideFigure Src="guide/extract-target.png" Caption="2 · Target and 3 · Load. Replace has no retention: the table always holds the latest load." />
+        </li>
+        <li><b>Schedule it.</b> In <b>4 · Trigger</b> keep <b>On a schedule</b> and pick "Every night at 02:00" under <b>Preset</b>. The form shows the next 5 runs.
+            <GuideFigure Src="guide/extract-trigger.png" Caption="4 · Trigger: the schedule. Addresses in Notify hear about this job's problems." />
+        </li>
+        <li><b>Save and run now</b> saves the job and runs it once right away.</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Spread nightly jobs over time instead of starting all at 02:00; the source server will thank you. For jobs that depend on each other use a <a href="/guide#nightly-export">dependency</a> instead of a time.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> Do not write same-named tables of different sources (<i>Customers</i> in ERP and CRM) to one target schema – the schema taken from the source name prevents it.
+        The <i>Strict</i> policy refuses to write into an existing table with a different structure; that is a safety net.</div>
+    <p><b>How do I check?</b> The job is <i>Succeeded</i> in <b>Run history</b> and the row count matches your expectation.</p>
+    <p class="small">Reference: <a href="/help#extract-source">Choosing the source</a> · <a href="/help#extract-target">Target table and schema policy</a> · <a href="/help#load-modes">Load modes</a> · <a href="/help#retention">Retention</a> · <a href="/help#cron">Scheduling</a></p>
+</section>
+
+<section id="large-tables">
+    <h2>Large, constantly changing tables</h2>
+    <p class="guide-meta">Who: Editor · Example: order or customer tables with millions of rows</p>
+    <p><b>Why?</b> Reading a large table completely every night loads the source and inflates the files. With the right mode only changed rows are read
+       and only the changes go to GCS (25 rows when 25 of 5,000 customers changed).</p>
+    <h3>Which mode?</h3>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>Need</th><th>Mode</th></tr></thead>
+        <tbody>
+            <tr><td><b>Current state</b> of every record, with a modification time column</td><td><b>Merge</b> + watermark (<code>ModifiedAt</code>)</td></tr>
+            <tr><td>Current state, no modification column, deleted rows must disappear too</td><td><b>Merge</b>, full read + "Delete rows whose key the source no longer returns"</td></tr>
+            <tr><td>The <b>history</b> of every change (a record several times)</td><td><b>Incremental</b> + watermark</td></tr>
+        </tbody>
+    </table>
+    <h3>Steps (Merge)</h3>
+    <ol>
+        <li>In <b>3 · Load</b> choose <b>Merge</b> as <b>Load mode</b>. The source table's primary key is ticked under <b>Key columns</b>.</li>
+        <li>If there is a modification time column, choose it as <b>Watermark column</b>: each night only rows changed since the last read are read.</li>
+        <li>If rows are physically deleted in the source and must be deleted in the target too, leave the watermark empty and tick "Delete rows whose key the source no longer returns".
+            <GuideFigure Src="guide/merge-load.png" Caption="Merge: the key (PK) is suggested; unchanged rows are not touched." />
+        </li>
+        <li>For busy sources enable <b>Read a consistent snapshot</b> in <b>1 · Source</b> (the DBA allows it once; the form shows the state).</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> A <code>rowversion</code> column is the best watermark: it does not miss transactions committed late. A modification time column is fine in most cases.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> The key must identify one row. If the source returns a key twice, the job stops and leaves the target unchanged – on purpose.
+        <b>WITH (NOLOCK)</b> can skip or double rows on large busy tables; use the snapshot option instead.</div>
+    <p><b>How do I check?</b> Merge jobs show <code>merge: +inserted ~updated -deleted</code> in <b>Run history</b>.</p>
+    <p class="small">Reference: <a href="/help#merge">Merge</a> · <a href="/help#load-modes">Load modes</a> · <a href="/help#consistency">Integrity and consistent reads</a></p>
+</section>
+
+<section id="nightly-export">
+    <h2>Send the collected data to GCS every night</h2>
+    <p class="guide-meta">Who: Editor · Time: 5 minutes</p>
+    <p><b>Why?</b> Analytics teams in the cloud (BigQuery, Databricks) expect the data every day, regularly and complete. One "All collected tables" export covers every collected
+       table of the DWH and picks up new tables automatically.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li><b>GCS Exports → + New export</b>. Choose the DWH server and database and the mode <b>All collected tables</b>.</li>
+        <li>Enter the <b>Bucket</b>. The object name template can stay as it is: files are sorted into table and day folders.</li>
+        <li><b>Choose the file format:</b> <b>CSV</b> for Excel and general use, <b>Parquet</b> for BigQuery, Spark and pandas (about 7× smaller, typed).
+            <GuideFigure Src="guide/export-format.png" Caption="3 · File format: CSV settings (delimiter, quoting, NULL) or Parquet compression." />
+        </li>
+        <li><b>Tie the schedule to the extracts:</b> in <b>4 · Trigger</b> choose <b>After other jobs</b> and tick the extract jobs.
+            The export starts by itself when all of them have succeeded.
+            <GuideFigure Src="guide/export-trigger.png" Caption="After other jobs: no guessing of times; the export starts when the extracts are done and waits if one fails." />
+        </li>
+        <li><b>Save</b>. Try it with <b>Run now</b> on the job page.</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Add a <i>lifecycle</i> rule to the bucket (e.g. 90 days) to remove old files; SqlHarbor never deletes files in the cloud.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> Read the <a href="/guide#personal-data">personal data</a> scenario before sending. "All collected tables" also sends every newly added table automatically.</div>
+    <p><b>How do I check?</b> The export row in <b>Run history</b> shows tables, rows, files and the GCS addresses of the files.</p>
+    <p class="small">Reference: <a href="/help#export-modes">Export modes</a> · <a href="/help#csv-format">CSV and Parquet</a> · <a href="/help#gcs">GCS settings and object names</a> · <a href="/help#dependencies">Job dependencies</a></p>
+</section>
+
+<section id="personal-data">
+    <h2>Keep personal data out of the cloud</h2>
+    <p class="guide-meta">Who: Admin · Recommended for GDPR/KVKK</p>
+    <p><b>Why?</b> E-mail addresses, national IDs, IBANs and phone numbers may stay in the DWH but must not be readable in the cloud files. SqlHarbor masks them while writing the files
+       and notices a forgotten rule before anything is sent.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li>On <b>Data protection</b> choose the DWH server and database and click <b>Scan</b>. Columns with personal data are listed, with partly hidden examples.</li>
+        <li><b>Create rule</b> on each row creates a rule. Suggested methods: e-mail → <b>Email</b>, national ID → <b>Hash</b>, IBAN and card → <b>Partial</b>.
+            A rule can be broader than one table: column pattern <code>*Email*</code>, scope <code>*</code>.</li>
+        <li>Keep the <b>Export guard</b> on <b>Warn</b> for the first weeks; switch to <b>Block</b> once the warnings are gone.
+            <GuideFigure Src="guide/privacy.png" Caption="Data protection: export guard, masking rules and the personal data scan." />
+        </li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Use <b>Hash</b> when analysts need to match customers across tables: the same value becomes the same code everywhere, but it cannot be reversed.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> Rules match column names. Free SQL can rename a column (<code>SELECT Email AS X</code>) – the export guard catches that.
+        "Already when collecting" writes masked values into the DWH too; it cannot be undone, choose it deliberately.</div>
+    <p><b>How do I check?</b> Scan again: every column shows a rule under "Masked by", and exports show no "Data protection warning".</p>
+    <p class="small">Reference: <a href="/help#masking">Data protection (masking)</a></p>
+</section>
+
+<section id="trust-the-data">
+    <h2>Make sure the data is complete and correct</h2>
+    <p class="guide-meta">Who: Editor · Recommended for critical tables</p>
+    <p><b>Why?</b> A "succeeded" job does not mean the data is right: the source system's nightly batch may have stopped halfway, or a filter may be wrong.
+       Checks catch that and keep bad data from reaching the cloud.</p>
+    <h3>Automatic (nothing to set up)</h3>
+    <ul>
+        <li>Every load: rows read from the source = rows written to the target. Every export: rows read from the DWH = rows in the files. A difference fails the run.</li>
+    </ul>
+    <h3>What you add</h3>
+    <ol>
+        <li>In job section <b>5 · Data quality</b> click <b>+ Add check</b>. Give every critical table at least
+            <b>Minimum rows per load</b> (no empty loads) and <b>Row count matches the source</b> (same count as the source; on changing sources set an increasing ID as <i>cutoff column</i>).</li>
+        <li>Add <b>Duplicate keys</b> for key columns and <b>Custom SQL</b> for business rules (e.g. no negative amounts).</li>
+        <li>Choose the severity: <b>Warning</b> only warns; <b>Error</b> also holds back the export that runs after this job.</li>
+        <li>Enter hours in "Alert when there is no good load for (hours)" (e.g. 26): you are told when the data is older than a day.
+            <GuideFigure Src="guide/extract-quality.png" Caption="5 · Data quality: the checks and their latest results." />
+        </li>
+    </ol>
+    <GuideFigure Src="guide/quality-page.png" Caption="The Data quality page: the latest state of every job's checks and stale jobs." />
+    <div class="alert alert-info"><b>Recommended.</b> Start with <b>Warning</b>, watch the results for a few days, tune the thresholds, then make the critical ones <b>Error</b> – no alert fatigue.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> Checks do not fix or undo data; they report and hold back dependent jobs. Fix the cause in the source and run the job again.</div>
+    <p class="small">Reference: <a href="/help#quality">Data quality checks</a> · <a href="/help#consistency">Integrity and consistent reads</a></p>
+</section>
+
+<section id="get-alerted">
+    <h2>Get told when something goes wrong</h2>
+    <p class="guide-meta">Who: Admin (channels), Editor (a job's Notify field)</p>
+    <p><b>Why?</b> A nightly failure should not be discovered when someone opens a report in the morning. Alerts arrive the minute it happens.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li>On <b>Alerts</b> click <b>+ New channel</b>: e-mail addresses, a Microsoft Teams channel (Workflows webhook) or a generic webhook.</li>
+        <li>Choose the events of the channel. Recommended for a team channel: <i>Failed, Missed, QualityFailed, Stale, NoServer</i>.</li>
+        <li>Try it with <b>Send test</b>.</li>
+        <li>For job owners put their e-mail addresses into the job's <b>Notify</b> field; they get only their own jobs' problems.
+            <GuideFigure Src="guide/alerts.png" Caption="Alerts: repeat interval, channels and recent deliveries." />
+        </li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> The same problem is not repeated within 60 minutes, and a "Recovered" message follows when it is fixed. A Teams channel is the easiest for teams with on-call duty.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> A completely stopped application cannot send alerts. Add <code>/health</code> to your monitoring system.</div>
+    <p class="small">Reference: <a href="/help#alerts">Alerts</a></p>
+</section>
+
+<section id="access">
+    <h2>Give people access</h2>
+    <p class="guide-meta">Who: Admin</p>
+    <p><b>Why?</b> Not everyone should pull data from every database. Roles decide <i>what</i> someone can do, server and database permissions decide <i>where</i>.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li>On <b>Permissions</b> give an AD group a role: <b>Viewer</b> (sees), <b>Editor</b> (creates and runs jobs), <b>Admin</b> (everything).</li>
+        <li>For Editors add which servers and databases they may use as <b>source</b> or <b>target</b>. Without a database the permission covers every database of the server.</li>
+        <li>Changes reach signed-in users within 10 minutes.</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Grant roles and permissions to AD groups, not to people; joiners and leavers are then handled in AD.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> Editors can run free SQL on sources. The real security boundary is the service account's rights: grant read-only on sources
+        (<b>Check permissions</b> shows more as <i>Excess</i>).</div>
+    <p class="small">Reference: <a href="/help#roles">Roles and permissions</a> · <a href="/help#permission-check">Permission check</a></p>
+</section>
+
+<section id="when-it-fails">
+    <h2>A job failed: what now?</h2>
+    <p class="guide-meta">Who: Editor, Admin</p>
+    <p><b>Why it matters:</b> a failed job leaves no half data behind (its rows are rolled back), but exports waiting for it stop too. Finding the reason quickly saves the day's data.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li>Look at <b>Status</b>: "Last run with problems" and the error column are the first clue. If "Workers online" is 0, the service is stopped – start it first.
+            <GuideFigure Src="guide/status-overview.png" Caption="Status: workers online, active jobs and the outcome of the latest runs." />
+        </li>
+        <li>Open the failed row in <b>Run history</b> for the message and details; the job name links to the job.
+            <GuideFigure Src="guide/runs.png" Caption="Run history: status, duration, rows and details of every run." />
+        </li>
+        <li>By message: <i>Strict schema policy</i> → <b>Check target</b>; <i>Login failed</i> → the service account's rights; <i>Snapshot reads are not allowed</i> → the DBA's setting;
+            <i>Integrity check failed</i> → run again and tell IT if it repeats.</li>
+        <li>After the fix click <b>Run now</b> on the job page. Exports that run after this job continue by themselves once it succeeds.</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Hangfire retries a failure automatically (extract 2×, export 3×). Short network problems usually resolve themselves.</div>
+    <p class="small">Reference: <a href="/help#troubleshooting">Statuses and troubleshooting</a> · <a href="/help#hangfire">Hangfire dashboard</a></p>
+</section>

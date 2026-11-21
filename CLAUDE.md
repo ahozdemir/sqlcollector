@@ -7,7 +7,9 @@ Guidance for Claude Code in this repository. Read it fully before changing code.
 - The owner (Ahmet) writes in **Turkish**: answer in Turkish. Everything in the product – UI, log and exception messages,
   code comments, README – is **English**. Exception: the **Help page is bilingual** – English technical reference
   (`Components/Pages/Help.razor`) and a plain-language Turkish guide (`Components/Pages/HelpTr.razor`, UI names kept in
-  English) with the same topic ids; a switch on the page chooses the language.
+  English) with the same topic ids; a switch on the page chooses the language. The **Guide** (`/guide`, `GuideEn.razor` /
+  `GuideTr.razor`) explains tasks scenario by scenario (why, steps, tips, pitfalls) with screenshots in `wwwroot/guide`,
+  regenerated from the running local app with `scripts/guide-screenshots.ps1` (crops never show user or machine names).
 - He reviews output critically and expects changes applied directly, with step-by-step numbers when explaining
   results (row counts, timings, before/after). Do not claim something works without running it.
 - **Delegate test execution to the `test-runner` subagent** (Sonnet 5.5, effort high – see `.claude/agents/test-runner.md`)
@@ -136,3 +138,5 @@ runtime behaviour, Help page (both languages) and README updated when user-visib
 - No FluentAssertions (license); use xUnit `Assert`.
 - New user-visible behaviour: update `Components/Pages/Help.razor` **and** `HelpTr.razor` (same `HelpLink` topic ids, both
   tables of contents) and README. `HelpTopicsTests` fails when a topic exists in only one language.
+  When a scenario of the Guide changes, update both `GuideEn.razor` and `GuideTr.razor` and refresh the screenshots
+  (`scripts/guide-screenshots.ps1`; adjust its crop regions when a page layout moves).

@@ -1,0 +1,213 @@
+@* Türkçe kılavuz: senaryo bazında, neden ve nasıl. Senaryo kimlikleri (id) GuideEn.razor ile aynıdır.
+   Ekran görüntüleri: wwwroot/guide/*.png (scripts/guide-screenshots.ps1 ile yeniden üretilir). *@
+
+<section id="first-steps">
+    <h2>Kurulumdan sonra ilk adımlar</h2>
+    <p class="guide-meta">Kim: Admin · Süre: 15 dakika · Bir kez yapılır</p>
+    <p><b>Neden?</b> Uygulama kurulduğunda hiçbir sunucu, kullanıcı veya bulut bağlantısı tanımlı değildir. Bu adımlar, diğer bütün senaryoların zeminidir;
+       sırası önemlidir, çünkü her adım bir öncekine dayanır.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>Yönetici şifresini belirleyin.</b> Sunucunun kendisinde tarayıcıyla <code>https://localhost</code> adresini açın, <b>Local administrator</b>'a tıklayın ve yeni bir şifre belirleyin.
+            <GuideFigure Src="guide/login.png" Caption="Giriş ekranı: kurumsal kullanıcılar Windows (AD) ile, ilk kurulumda yerel yönetici ile girer." />
+        </li>
+        <li><b>Google Cloud anahtarını yükleyin.</b> <b>Settings → Google Cloud Storage credential</b> bölümünde servis hesabının JSON anahtarını seçip <b>Save key</b>'e basın,
+            ardından bucket adını yazıp <b>Test connection</b> ile deneyin.
+            <GuideFigure Src="guide/settings-gcs.png" Caption="Settings sayfasında GCS anahtarı: anahtar şifrelenerek saklanır, ekranda yalnızca servis hesabının adı görünür." />
+        </li>
+        <li><b>Kurumsal HTTPS sertifikasını yükleyin</b> (<b>Settings → HTTPS certificate</b>). Kurulumdaki geçici sertifika için tarayıcılar uyarı verir.</li>
+        <li><b>Sunucuları ekleyin</b> (<b>Servers</b>): kaynak SQL Server'ları (veri okunacak) ve hedef SQL Server'ı (DWH) ekleyip her biri için <b>Test</b>'e basın.</li>
+        <li><b>İzinleri kontrol edin:</b> <b>Servers</b> sayfasındaki <b>Check permissions</b>, servis hesaplarının yetkilerini olması gerekenle karşılaştırır.</li>
+        <li><b>Kullanıcılara rol verin</b> (bkz. <a href="/guide#access">Kullanıcılara yetki vermek</a>).</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Kişileri tek tek eklemek yerine AD gruplarına rol verin (örn. <i>DWH-Editors</i>). İnsanlar gruba girip çıktıkça yetkileri kendiliğinden değişir.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Yerel yönetici hesabı yalnızca ilk kurulum ve acil durumlar içindir; şifresini güvenli bir yerde saklayın. Günlük kullanımda herkes Windows hesabıyla girmelidir.</div>
+    <p><b>Nasıl kontrol ederim?</b> <b>Status</b> sayfasında "Workers online" en az 1 olmalı ve izin kontrolünde kırmızı (<i>Missing</i>) satır kalmamalıdır.</p>
+    <p class="small">Başvuru: <a href="/help#installation">Kurulum</a> · <a href="/help#https">HTTPS sertifikası</a> · <a href="/help#gcs">GCS ayarları</a> · <a href="/help#servers">Sunucular ve servis hesapları</a> · <a href="/help#permission-check">İzin kontrolü</a></p>
+</section>
+
+<section id="nightly-table">
+    <h2>Bir tabloyu her gece DWH'ye almak</h2>
+    <p class="guide-meta">Kim: Editor · Süre: 5 dakika</p>
+    <p><b>Neden?</b> Raporlar ve analizler operasyonel sistemleri (ERP, CRM) yormadan DWH'deki kopya üzerinden yapılır. Gece alınan kopya, gün içinde hızlı ve güvenli sorgulanır.</p>
+    <p><b>Başlamadan önce:</b> kaynak ve hedef sunucular <b>Servers</b>'ta tanımlı olmalı ve size bu veritabanları için yetki verilmiş olmalı.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>Extract Jobs → + New job</b>. <b>Source server</b> ve <b>Source database</b>'i seçin, listeden tabloyu işaretleyin; kolonlar otomatik seçilir.
+            <b>Preview</b> ile ilk 50 satıra bakın.
+            <GuideFigure Src="guide/extract-source.png" Caption="1 · Source: kaynak sunucu, veritabanı ve tablo. Yoğun kaynaklarda 'Read a consistent snapshot' önerilir." />
+        </li>
+        <li><b>Hedefi seçin.</b> <b>Target server</b> ve <b>Target database</b>'i seçin. Şema kaynak adından otomatik dolar (ERP → <code>erp</code>), tablo adı kaynaktakiyle aynı kalır.
+            <b>Check target</b> tablo zaten varsa kaynakla farklarını gösterir; yoksa ilk çalıştırmada oluşturulur.</li>
+        <li><b>Yükleme modunu seçin</b> – en önemli karar budur:
+            <ul>
+                <li>Tablonun yalnızca <b>bugünkü hâli</b> lazımsa: küçük tablolarda <b>Replace</b>, büyük tablolarda <b>Merge</b>.</li>
+                <li><b>Her günün fotoğrafını</b> saklamak istiyorsanız (örn. stok seviyeleri): <b>Append</b> ve bir <b>Retention</b> süresi.</li>
+            </ul>
+            <GuideFigure Src="guide/extract-target.png" Caption="2 · Target ve 3 · Load: hedef tablo ve yükleme modu. Replace'te saklama süresi uygulanmaz; tablo hep son yüklemeyi tutar." />
+        </li>
+        <li><b>Zamanlayın.</b> <b>4 · Trigger</b> bölümünde <b>On a schedule</b> seçili kalsın ve <b>Preset</b> listesinden "Every night at 02:00"ı seçin. Form, sonraki 5 çalışma zamanını gösterir.
+            <GuideFigure Src="guide/extract-trigger.png" Caption="4 · Trigger: zamanlama. Notify alanına yazılan adresler bu job'ın sorunlarında haber alır." />
+        </li>
+        <li><b>Save and run now</b> ile kaydedin ve hemen bir kez çalıştırın.</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Gece işlerini aynı dakikaya yığmayın (hepsi 02:00 olmasın); kaynak sunucu rahat eder. Birbirine bağlı işler için saat yerine <a href="/guide#nightly-export">bağımlılık</a> kullanın.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Farklı kaynaklardaki aynı adlı tabloları (ERP ve CRM'deki <i>Customers</i>) aynı hedef şemaya yazmayın; şemanın kaynak adından gelmesi bunu önler.
+        <i>Strict</i> kural, hedefte farklı yapıdaki bir tablonun üzerine yazmayı engeller – bu bir güvenlik önlemidir.</div>
+    <p><b>Nasıl kontrol ederim?</b> <b>Run history</b>'de job <i>Succeeded</i> olmalı ve satır sayısı beklentinizle uyuşmalı.</p>
+    <p class="small">Başvuru: <a href="/help#extract-source">Kaynağı seçmek</a> · <a href="/help#extract-target">Hedef tablo ve şema kuralı</a> · <a href="/help#load-modes">Yükleme modları</a> · <a href="/help#retention">Saklama süresi</a> · <a href="/help#cron">Zamanlama</a></p>
+</section>
+
+<section id="large-tables">
+    <h2>Büyük ve sürekli değişen tablolar</h2>
+    <p class="guide-meta">Kim: Editor · Örnek: milyonlarca satırlık sipariş veya müşteri tablosu</p>
+    <p><b>Neden?</b> Büyük bir tabloyu her gece baştan okumak hem kaynağı yorar hem de dosya boyutlarını büyütür. Doğru mod seçilince yalnızca değişen satırlar okunur
+       ve GCS'e yalnızca değişiklikler gider (örn. 5.000 müşteriden 25'i değiştiyse 25 satır).</p>
+    <h3>Hangi mod?</h3>
+    <table class="table table-sm table-bordered bg-white">
+        <thead class="table-light"><tr><th>İhtiyaç</th><th>Mod</th></tr></thead>
+        <tbody>
+            <tr><td>Her kaydın <b>güncel hâli</b>, kaydın değişiklik zamanı kolonu var</td><td><b>Merge</b> + watermark (<code>ModifiedAt</code>)</td></tr>
+            <tr><td>Her kaydın güncel hâli, değişiklik kolonu yok, silinenler de silinsin</td><td><b>Merge</b>, tam okuma + "Delete rows whose key the source no longer returns"</td></tr>
+            <tr><td>Her değişikliğin <b>geçmişi</b> (bir kayıt birden çok kez)</td><td><b>Incremental</b> + watermark</td></tr>
+        </tbody>
+    </table>
+    <h3>Adımlar (Merge)</h3>
+    <ol>
+        <li><b>3 · Load</b> bölümünde <b>Load mode</b> olarak <b>Merge</b>'ü seçin. Kaynak tablonun birincil anahtarı <b>Key columns</b>'ta otomatik işaretlenir.</li>
+        <li>Değişiklik zamanı kolonu varsa <b>Watermark column</b>'da seçin; her gece yalnızca son okumadan sonra değişen satırlar okunur.</li>
+        <li>Kaynakta satırlar fiziksel olarak siliniyor ve hedefte de silinmesini istiyorsanız watermark'ı boş bırakıp "Delete rows whose key the source no longer returns"u işaretleyin.
+            <GuideFigure Src="guide/merge-load.png" Caption="Merge: anahtar kolon (PK) otomatik önerilir; değişmeyen satırlara dokunulmaz." />
+        </li>
+        <li>İşlemlerin sürdüğü kaynaklarda <b>1 · Source</b> bölümünde <b>Read a consistent snapshot</b>'ı açın (DBA'nın bir kez izin vermesi gerekir; form durumu gösterir).</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Mümkünse watermark olarak <code>rowversion</code> kolonu kullanın: geç kaydedilen işlemleri de kaçırmaz. Saat kolonları (ModifiedAt) çoğu durumda yeterlidir.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Anahtar kolon gerçekten tek satırı tanımlamalıdır. Kaynakta aynı anahtar iki kez gelirse job durur ve hedefe dokunmaz – veri bozulmasın diye.
+        <b>WITH (NOLOCK)</b> büyük ve yoğun tablolarda satır atlayabilir veya iki kez okuyabilir; onun yerine snapshot kullanın.</div>
+    <p><b>Nasıl kontrol ederim?</b> <b>Run history</b>'de Merge job'ları <code>merge: +eklenen ~güncellenen -silinen</code> olarak görünür.</p>
+    <p class="small">Başvuru: <a href="/help#merge">Merge</a> · <a href="/help#load-modes">Yükleme modları</a> · <a href="/help#consistency">Bütünlük ve tutarlı okuma</a></p>
+</section>
+
+<section id="nightly-export">
+    <h2>Toplanan veriyi her gece GCS'e göndermek</h2>
+    <p class="guide-meta">Kim: Editor · Süre: 5 dakika</p>
+    <p><b>Neden?</b> Buluttaki analiz ekipleri (BigQuery, Databricks) verinin her gün düzenli ve eksiksiz gelmesini bekler. Tek bir "All collected tables" export'u
+       DWH'deki bütün toplanan tabloları kapsar ve yeni tabloları kendiliğinden ekler.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>GCS Exports → + New export</b>. Sunucu olarak DWH sunucusunu, veritabanı olarak DWH'yi, mod olarak <b>All collected tables</b>'ı seçin.</li>
+        <li><b>Bucket</b> adını yazın. Dosya adı şablonunu olduğu gibi bırakabilirsiniz: dosyalar tablo ve gün klasörlerine ayrılır.</li>
+        <li><b>Dosya formatını seçin:</b> Excel veya genel kullanım için <b>CSV</b>; BigQuery, Spark, pandas için <b>Parquet</b> (yaklaşık 7 kat küçük, tipler korunur).
+            <GuideFigure Src="guide/export-format.png" Caption="3 · File format: CSV ayarları (ayraç, tırnak, NULL) veya Parquet sıkıştırması." />
+        </li>
+        <li><b>Zamanlamayı extract'lere bağlayın:</b> <b>4 · Trigger</b>'da <b>After other jobs</b>'u seçip extract job'larını işaretleyin.
+            Export, seçilen bütün extract'ler başarıyla bitince kendiliğinden başlar.
+            <GuideFigure Src="guide/export-trigger.png" Caption="After other jobs: saat tahmini yok; extract'ler bitince export başlar, biri hata alırsa bekler." />
+        </li>
+        <li><b>Save</b>. İlk denemeyi job sayfasındaki <b>Run now</b> ile yapabilirsiniz.</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> GCS'te eski dosyaların temizliği için bucket'a bir <i>lifecycle</i> kuralı (örn. 90 gün) tanımlayın; SqlHarbor buluttaki dosyaları silmez.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Göndermeden önce <a href="/guide#personal-data">kişisel veri</a> senaryosuna bakın. "All collected tables" yeni eklenen her tabloyu da otomatik gönderir.</div>
+    <p><b>Nasıl kontrol ederim?</b> <b>Run history</b>'de export satırında tablo, satır ve dosya sayıları ile dosyaların GCS adresleri görünür.</p>
+    <p class="small">Başvuru: <a href="/help#export-modes">Export modları</a> · <a href="/help#csv-format">CSV ve Parquet</a> · <a href="/help#gcs">GCS ayarları ve dosya adları</a> · <a href="/help#dependencies">Job bağımlılıkları</a></p>
+</section>
+
+<section id="personal-data">
+    <h2>Kişisel veriyi buluta açık göndermemek</h2>
+    <p class="guide-meta">Kim: Admin · KVKK uyumu için önerilir</p>
+    <p><b>Neden?</b> E-posta, TCKN, IBAN, telefon gibi veriler DWH'de kalabilir ama buluttaki dosyalarda açık olmamalıdır. SqlHarbor bunları dosyaya yazarken maskeler
+       ve kural unutulmuşsa göndermeden önce fark eder.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>Data protection</b> sayfasında DWH sunucusunu ve veritabanını seçip <b>Scan</b>'e basın. Kişisel veri içeren kolonlar, örnek değerleri gizlenmiş olarak listelenir.</li>
+        <li>Her satırdaki <b>Create rule</b> ile kural oluşturun. Önerilen yöntemler: e-posta → <b>Email</b>, TCKN → <b>Hash</b>, IBAN ve kart → <b>Partial</b>.
+            Kuralı tek tablo yerine geniş tutabilirsiniz: kolon deseni <code>*Email*</code>, kapsam <code>*</code>.</li>
+        <li><b>Export guard</b>'ı ilk haftalarda <b>Warn</b>'da tutun, uyarıları temizledikten sonra <b>Block</b>'a alın.
+            <GuideFigure Src="guide/privacy.png" Caption="Data protection: export guard, maskeleme kuralları ve kişisel veri taraması." />
+        </li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Analiz ekipleri müşteriyi tablolar arasında eşleştirmek istiyorsa <b>Hash</b> kullanın: aynı değer her yerde aynı koda dönüşür, ama geri çevrilemez.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Kurallar kolon adına göre çalışır. Serbest SQL ile kolon adı değiştirilirse (<code>SELECT Email AS X</code>) kural yakalamaz – bunu export guard yakalar.
+        "Already when collecting" seçeneği veriyi DWH'ye de maskeli yazar; geri alınamaz, dikkatli seçin.</div>
+    <p><b>Nasıl kontrol ederim?</b> Taramayı tekrarlayın: bütün kolonlar "Masked by" sütununda bir kural göstermeli. Export'larda "Data protection warning" çıkmamalı.</p>
+    <p class="small">Başvuru: <a href="/help#masking">Veri koruma (maskeleme)</a></p>
+</section>
+
+<section id="trust-the-data">
+    <h2>Verinin eksiksiz ve doğru olduğundan emin olmak</h2>
+    <p class="guide-meta">Kim: Editor · Kritik tablolar için önerilir</p>
+    <p><b>Neden?</b> Job'ın "başarılı" olması verinin doğru olduğu anlamına gelmez: kaynak sistemin gece işi yarım kalmış, bir filtre yanlış yazılmış olabilir.
+       Kontroller bunu yakalar ve hatalı verinin buluta gitmesini engeller.</p>
+    <h3>Otomatik olanlar (ayar gerekmez)</h3>
+    <ul>
+        <li>Her yüklemede: kaynaktan okunan satır = hedefe yazılan satır. Her export'ta: DWH'den okunan satır = dosyalardaki satır. Fark varsa çalıştırma hata verir.</li>
+    </ul>
+    <h3>Sizin ekleyecekleriniz</h3>
+    <ol>
+        <li>Job formunun <b>5 · Data quality</b> bölümünde <b>+ Add check</b>. Kritik her tabloya en az şu ikisini ekleyin:
+            <b>Minimum rows per load</b> (boş yükleme olmasın) ve <b>Row count matches the source</b> (kaynakla aynı sayı; değişen kaynaklarda artan bir ID'yi <i>cutoff column</i> olarak verin).</li>
+        <li>Anahtar kolonlar için <b>Duplicate keys</b>, iş kuralları için <b>Custom SQL</b> ekleyin (örn. negatif tutar olmaz).</li>
+        <li>Seviyeyi seçin: <b>Warning</b> yalnızca uyarır; <b>Error</b> ise bu job'dan sonra çalışan export'u bekletir.</li>
+        <li>"Alert when there is no good load for (hours)" alanına bir saat yazın (örn. 26): veri bir günden uzun süre tazelenmezse alarm gelir.
+            <GuideFigure Src="guide/extract-quality.png" Caption="5 · Data quality: kontroller ve son sonuçları." />
+        </li>
+    </ol>
+    <GuideFigure Src="guide/quality-page.png" Caption="Data quality sayfası: bütün job'ların kontrollerinin son durumu ve bayat (stale) job'lar." />
+    <div class="alert alert-info"><b>Öneri.</b> Önce <b>Warning</b> ile başlayın, birkaç gün sonuçları izleyip eşikleri ayarlayın, sonra kritik olanları <b>Error</b> yapın. Böylece gereksiz alarm üretmezsiniz.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Kontroller veriyi düzeltmez ve geri almaz; yalnızca haber verir ve bağımlı işleri bekletir. Sorunu kaynakta düzeltip job'ı yeniden çalıştırın.</div>
+    <p class="small">Başvuru: <a href="/help#quality">Veri kalitesi kontrolleri</a> · <a href="/help#consistency">Bütünlük ve tutarlı okuma</a></p>
+</section>
+
+<section id="get-alerted">
+    <h2>Sorun olunca haberdar olmak</h2>
+    <p class="guide-meta">Kim: Admin (kanallar), Editor (job'ın Notify alanı)</p>
+    <p><b>Neden?</b> Gece çalışan bir job'ın hatası sabah rapor açılınca fark edilmemeli. Alarmlar sorunu oluştuğu dakikada iletir.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>Alerts</b> sayfasında <b>+ New channel</b>: e-posta adresleri, bir Microsoft Teams kanalı (Workflows webhook) veya genel bir webhook.</li>
+        <li>Kanalın hangi olaylarda haber alacağını seçin. Ekip kanalı için önerilen: <i>Failed, Missed, QualityFailed, Stale, NoServer</i>.</li>
+        <li><b>Send test</b> ile deneyin.</li>
+        <li>Job sahipleri için job formundaki <b>Notify</b> alanına e-posta adreslerini yazın; yalnızca kendi job'larının sorunlarını alırlar.
+            <GuideFigure Src="guide/alerts.png" Caption="Alerts: tekrar aralığı, kanallar ve son gönderimler." />
+        </li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Aynı sorun 60 dakika içinde tekrar gönderilmez; düzelince "Recovered" mesajı gelir. Gece nöbeti olan ekipler için Teams kanalı en pratik yoldur.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Uygulamanın kendisi tamamen durursa alarm gönderemez. Kurumunuzun izleme sistemine <code>/health</code> adresini ekleyin.</div>
+    <p class="small">Başvuru: <a href="/help#alerts">Alarmlar</a></p>
+</section>
+
+<section id="access">
+    <h2>Kullanıcılara yetki vermek</h2>
+    <p class="guide-meta">Kim: Admin</p>
+    <p><b>Neden?</b> Herkes her veritabanından veri çekememeli. Roller ne yapılabileceğini, sunucu ve veritabanı izinleri de nerede yapılabileceğini belirler.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>Permissions</b> sayfasında bir AD grubuna rol verin: <b>Viewer</b> (yalnızca görür), <b>Editor</b> (job oluşturur ve çalıştırır), <b>Admin</b> (her şey).</li>
+        <li>Editor'lar için hangi sunucu ve veritabanlarını <b>kaynak</b> veya <b>hedef</b> olarak kullanabileceklerini ekleyin. Veritabanı boş bırakılırsa o sunucudaki bütün veritabanları geçerlidir.</li>
+        <li>Değişiklik, giriş yapmış kullanıcılara en geç 10 dakikada yansır.</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Rol ve izinleri kişilere değil AD gruplarına verin; işe giriş ve ayrılışlar AD tarafında yönetilsin.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> Editor'lar kaynakta serbest SQL çalıştırabilir. Asıl güvenlik sınırı servis hesabının yetkileridir: kaynakta yalnızca okuma yetkisi verin
+        (<b>Check permissions</b> fazla yetkiyi <i>Excess</i> olarak gösterir).</div>
+    <p class="small">Başvuru: <a href="/help#roles">Roller ve yetkiler</a> · <a href="/help#permission-check">İzin kontrolü</a></p>
+</section>
+
+<section id="when-it-fails">
+    <h2>Bir job hata verdi: ne yapmalı?</h2>
+    <p class="guide-meta">Kim: Editor, Admin</p>
+    <p><b>Neden önemli?</b> Hatalı bir job yarım veri bırakmaz (yazdığı satırlar geri alınır), ama bekleyen export'lar da durur. Nedeni hızla bulmak günün verisini kurtarır.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li><b>Status</b> sayfasına bakın: "Last run with problems" sayısı ve hata sütunu ilk ipucudur. "Workers online" 0 ise servis durmuştur – önce onu başlatın.
+            <GuideFigure Src="guide/status-overview.png" Caption="Status: çalışan Worker'lar, aktif job'lar ve son çalıştırmaların özeti." />
+        </li>
+        <li><b>Run history</b>'de hatalı satıra bakın; hata mesajı ve ayrıntı orada. Job adına tıklayarak job sayfasına geçin.
+            <GuideFigure Src="guide/runs.png" Caption="Run history: her çalıştırmanın durumu, süresi, satır sayısı ve ayrıntısı." />
+        </li>
+        <li>Mesaja göre: <i>Strict schema policy</i> → <b>Check target</b> ile farka bakın; <i>Login failed</i> → servis hesabının yetkisi; <i>Snapshot reads are not allowed</i> → DBA izni;
+            <i>Integrity check failed</i> → yeniden çalıştırın, sürerse BT'ye haber verin.</li>
+        <li>Düzelttikten sonra job sayfasında <b>Run now</b>. Başarılı olunca, bu job'a bağlı export'lar kendiliğinden devam eder.</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Hangfire bir hatayı otomatik olarak birkaç kez tekrar dener (extract 2, export 3 kez). Geçici ağ sorunları çoğu zaman kendiliğinden düzelir.</div>
+    <p class="small">Başvuru: <a href="/help#troubleshooting">Durumlar ve sorun giderme</a> · <a href="/help#hangfire">Hangfire paneli</a></p>
+</section>

@@ -1,0 +1,9 @@
+@* A screenshot in the Guide; a click opens it in full size. *@
+<figure class="guide-figure">
+    <a href="@Src" target="_blank" title="@(Caption)"><img src="@Src" alt="@Caption" loading="lazy" /></a>
+    <figcaption>@Caption</figcaption>
+</figure>
+@code {
+    [Parameter, EditorRequired] public string Src { get; set; } = "";
+    [Parameter] public string Caption { get; set; } = "";
+}

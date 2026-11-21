@@ -147,6 +147,8 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - Hangfire Dashboard: full access for Admin, read-only for others
 - In-app **Help** in **English and Turkish** (switch on the page; the Turkish guide is plain-language with step-by-step
   examples and FAQ), plus `?` links next to each form section
+- **Guide** (menu *Guide*): nine scenarios – first steps, a nightly table, large tables, the nightly export, personal data,
+  trusting the data, alerts, access, failures – each with why, steps, tips, pitfalls and screenshots, in English and Turkish
 
 ---
 

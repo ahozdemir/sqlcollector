@@ -1,0 +1,9 @@
+@* Tabs shared by the Guide (scenarios) and the Help reference, in the chosen language. *@
+<ul class="nav nav-tabs mb-3 help-tabs">
+    <li class="nav-item"><a class="nav-link @(Active == "guide" ? "active" : "")" href="/guide">@(Tr ? "Kılavuz (senaryolar)" : "Guide (scenarios)")</a></li>
+    <li class="nav-item"><a class="nav-link @(Active == "help" ? "active" : "")" href="/help">@(Tr ? "Başvuru (tüm konular)" : "Reference (all topics)")</a></li>
+</ul>
+@code {
+    [Parameter] public string Active { get; set; } = "help";
+    [Parameter] public bool Tr { get; set; }
+}

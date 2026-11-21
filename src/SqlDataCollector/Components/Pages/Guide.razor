@@ -1,0 +1,106 @@
+@page "/guide"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject IJSRuntime JS
+
+<PageTitle>@(tr ? "Kılavuz" : "Guide") – SqlHarbor</PageTitle>
+
+<div class="row">
+    <div class="col-lg-3 d-none d-lg-block">
+        <nav class="help-toc card"><div class="card-body">
+            <div class="section-title mb-2">@(tr ? "Senaryolar" : "Scenarios")</div>
+            @foreach (var (id, en, trTitle) in Scenarios)
+            {
+                <a href="/guide#@id">@(tr ? trTitle : en)</a>
+            }
+        </div></nav>
+    </div>
+
+    <div class="col-lg-9 help-content">
+        <div class="d-flex align-items-center mb-2">
+            <h1 class="h4 mb-0 me-auto">@(tr ? "Kılavuz" : "Guide")</h1>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Language">
+                <button type="button" class="btn @(tr ? "btn-outline-secondary" : "btn-secondary")" @onclick='() => SetLanguageAsync("en")'>English</button>
+                <button type="button" class="btn @(tr ? "btn-secondary" : "btn-outline-secondary")" @onclick='() => SetLanguageAsync("tr")'>Türkçe</button>
+            </div>
+        </div>
+        <HelpTabs Active="guide" Tr="tr" />
+
+        <p>@(tr
+            ? "Her senaryo, bir işi baştan sona nasıl yapacağınızı anlatır: neden yapıldığı, adımlar, öneriler ve dikkat edilecekler. Ayrıntılı bilgi için her senaryonun sonundaki Başvuru bağlantılarını kullanın."
+            : "Each scenario walks through one task from start to finish: why, the steps, recommendations and pitfalls. The Reference links at the end of each scenario go into detail.")</p>
+        <div class="guide-cards">
+            @foreach (var (id, en, trTitle) in Scenarios)
+            {
+                <a class="guide-card" href="/guide#@id"><b>@(tr ? trTitle : en)</b><span>@(tr ? SummaryTr[id] : SummaryEn[id])</span></a>
+            }
+        </div>
+
+        @if (tr) { <GuideTr /> } else { <GuideEn /> }
+    </div>
+</div>
+
+@code {
+    private bool tr;
+    private bool scrollPending;
+
+    /// <summary>Scenario ids are the same in both languages (anchors, tests).</summary>
+    public static readonly (string Id, string En, string Tr)[] Scenarios =
+    [
+        ("first-steps", "First steps after the installation", "Kurulumdan sonra ilk adımlar"),
+        ("nightly-table", "Copy a table to the DWH every night", "Bir tabloyu her gece DWH'ye almak"),
+        ("large-tables", "Large, constantly changing tables", "Büyük ve sürekli değişen tablolar"),
+        ("nightly-export", "Send the collected data to GCS every night", "Toplanan veriyi her gece GCS'e göndermek"),
+        ("personal-data", "Keep personal data out of the cloud", "Kişisel veriyi buluta açık göndermemek"),
+        ("trust-the-data", "Make sure the data is complete and correct", "Verinin eksiksiz ve doğru olduğundan emin olmak"),
+        ("get-alerted", "Get told when something goes wrong", "Sorun olunca haberdar olmak"),
+        ("access", "Give people access", "Kullanıcılara yetki vermek"),
+        ("when-it-fails", "A job failed: what now?", "Bir job hata verdi: ne yapmalı?")
+    ];
+
+    private static readonly Dictionary<string, string> SummaryEn = new()
+    {
+        ["first-steps"] = "Password, GCS key, certificate, servers – in this order.",
+        ["nightly-table"] = "Source, target, load mode and schedule of a first extract job.",
+        ["large-tables"] = "Read only what changed and keep one row per key.",
+        ["nightly-export"] = "One export that starts when the extracts are done.",
+        ["personal-data"] = "Scan, mask and block before anything leaves.",
+        ["trust-the-data"] = "Automatic integrity checks plus your own quality rules.",
+        ["get-alerted"] = "E-mail or Teams for failures, missed runs and bad data.",
+        ["access"] = "Roles for AD groups and which databases they may use.",
+        ["when-it-fails"] = "Find the reason quickly and run the job again."
+    };
+
+    private static readonly Dictionary<string, string> SummaryTr = new()
+    {
+        ["first-steps"] = "Şifre, GCS anahtarı, sertifika, sunucular – bu sırayla.",
+        ["nightly-table"] = "İlk extract job'ın kaynağı, hedefi, yükleme modu ve zamanlaması.",
+        ["large-tables"] = "Yalnızca değişeni okumak ve her anahtar için tek satır tutmak.",
+        ["nightly-export"] = "Extract'ler bitince kendiliğinden başlayan tek bir export.",
+        ["personal-data"] = "Veri çıkmadan önce taramak, maskelemek ve engellemek.",
+        ["trust-the-data"] = "Otomatik bütünlük kontrolü ve kendi kalite kurallarınız.",
+        ["get-alerted"] = "Hata, kaçırılan çalışma ve hatalı veri için e-posta veya Teams.",
+        ["access"] = "AD gruplarına rol ve hangi veritabanlarını kullanabilecekleri.",
+        ["when-it-fails"] = "Nedeni hızla bulmak ve job'ı yeniden çalıştırmak."
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var lang = await JS.InvokeAsync<string>("sdcHelp.getLanguage");
+            if (lang == "tr") { tr = true; scrollPending = true; StateHasChanged(); }
+        }
+        else if (scrollPending)
+        {
+            scrollPending = false;
+            await JS.InvokeVoidAsync("sdcHelp.scrollToHash");
+        }
+    }
+
+    private async Task SetLanguageAsync(string lang)
+    {
+        tr = lang == "tr";
+        scrollPending = true;
+        await JS.InvokeVoidAsync("sdcHelp.setLanguage", lang);
+    }
+}
