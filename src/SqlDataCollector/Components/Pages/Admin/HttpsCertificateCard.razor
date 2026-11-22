@@ -7,8 +7,15 @@
     <div class="section-title mb-2">HTTPS certificate <HelpLink Topic="https" Title="HTTPS certificate" /></div>
     @if (!Certificates.Enabled)
     {
-        <div class="small text-muted">HTTPS is not enabled for this process (<span class="mono">Https:Port</span> is 0; the address comes from <span class="mono">Urls</span>).
-            The installer enables it on port 443 with a self-signed certificate.</div>
+        <div class="small">
+            <p class="mb-2">HTTPS is off for this process (<span class="mono">Https:Port</span> is 0), so there is no certificate to replace yet: the application is served
+                over plain HTTP at the address of <span class="mono">Urls</span>.</p>
+            <p class="mb-2"><b>To switch it on</b>, set <span class="mono">Https:Port</span> (e.g. <span class="mono">443</span>) in <span class="mono">appsettings.json</span> on this server –
+                optionally <span class="mono">Https:HostName</span> (the name in the certificate) and <span class="mono">Https:HttpRedirectPort</span> (e.g. <span class="mono">80</span>) –
+                and restart the service. A self-signed certificate is created at start, and this card then lets you import your corporate certificate
+                (<span class="mono">.pfx</span>) or pick one from the Windows store.</p>
+            <p class="mb-0 text-muted">Installations made with the setup program have HTTPS on port 443.</p>
+        </div>
     }
     else
     {

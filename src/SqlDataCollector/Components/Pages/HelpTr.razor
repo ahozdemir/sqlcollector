@@ -397,6 +397,8 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
     <p>Kurulum geçici bir (self-signed) sertifika oluşturur; tarayıcı bunun için uyarı verir. Kurumsal sertifikanızı <b>Settings → HTTPS certificate</b> bölümünden yükleyin:
        <code>.pfx</code>/<code>.p12</code> dosyası ve şifresi ya da Windows sertifika deposundan seçim. Yeniden başlatma gerekmez.
        Süresinin dolmasına 30 gün kala Status sayfası uyarır ve alarm gider.</p>
+    <p>Yükleme bölümü yalnızca HTTPS açıkken görünür. <code>Https:Port</code> 0 ise (düz HTTP, örneğin yerel test) kart yalnızca nasıl açılacağını anlatır:
+       sunucudaki <code>appsettings.json</code> dosyasında portu (örneğin 443) yazın ve servisi yeniden başlatın.</p>
 </section>
 
 <section id="installation">

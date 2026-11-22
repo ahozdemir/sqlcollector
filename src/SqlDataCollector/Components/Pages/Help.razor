@@ -465,6 +465,8 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
             <p>With <code>Https:Port</code> set (the installer uses 443) the application serves HTTPS itself (Kestrel, no IIS). Without a certificate it creates a
                <b>self-signed</b> one for <code>Https:HostName</code>, the machine name and <code>localhost</code> (2 years) – browsers warn until you replace it.</p>
             <ul>
+                <li>The import below appears only while HTTPS is on. With <code>Https:Port</code> = 0 (plain HTTP, e.g. a local test) the card only explains how to switch it on:
+                    set the port in <code>appsettings.json</code> and restart the service.</li>
                 <li><i>Settings → HTTPS certificate</i> (Admin): import a <b>PKCS#12</b> file (<code>.pfx</code>/<code>.p12</code> with private key and its password) or pick a
                     certificate of the Windows store <code>LocalMachine\My</code> (the service account needs read access to its private key: certlm.msc → Manage Private Keys).</li>
                 <li>The new certificate applies to new connections immediately – no restart. An imported file is stored DPAPI-protected in <code>Https:CertificateDirectory</code>
