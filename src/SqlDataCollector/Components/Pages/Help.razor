@@ -623,6 +623,23 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
                other roles see it read-only. Job definitions and schedules are edited only in this application.</p>
         </section>
 
+        <section id="monitoring">
+            <h2>Timeline, trends and pipelines</h2>
+            <ul>
+                <li><b>Run timeline</b> (Status): one lane per job, one bar per run – the bar starts when the run started and is as long as it took. Green succeeded,
+                    amber partially failed or a quality warning, red failed, blue running; the vertical line is now. Choose 6, 12 or 24 hours or 3 days.
+                    Hover a bar for times, duration and rows; click it to open the job. <b>↳</b> marks jobs that run after other jobs. Overlapping bars show jobs that
+                    compete for the same night window; a bar that keeps getting longer is a job worth a look.</li>
+                <li><b>Trends</b> (Status, job table): the rows and the duration of the last 30 runs as small lines. The last point turns amber when it is less than half
+                    or more than twice the usual value (the median of the earlier runs, at least five) – e.g. a table that suddenly delivers a quarter of its rows.
+                    A red ring means the last run failed.</li>
+                <li><b>Pipelines</b> (menu): every export and every job that runs after other jobs, with the jobs they wait for, left to right, and the destinations
+                    the exports upload to. Boxes have the colour of the last run; a dashed gray box is <i>waiting</i>: it runs after other jobs and one of them has not
+                    succeeded yet (the box names it). Inactive jobs are gray. Extract jobs without dependents are listed as a count below the graph.</li>
+                <li>Everything is drawn by the application itself (no external scripts), so it works on servers without internet access.</li>
+            </ul>
+        </section>
+
         <section id="troubleshooting">
             <h2>Statuses and troubleshooting</h2>
             <table class="table table-sm table-bordered bg-white">
@@ -683,7 +700,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
         ("export", "Exports"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("transfer", "Import and export jobs"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
-        ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
+        ("hangfire", "Hangfire dashboard"), ("monitoring", "Timeline, trends and pipelines"), ("troubleshooting", "Statuses and troubleshooting")
     ];
 
     private static readonly (string Id, string Title)[] TocTr =
@@ -696,6 +713,6 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
         ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"), ("transfer", "Job'ları dışa / içe aktarmak"),
         ("servers", "Sunucular ve servis hesapları"), ("servers-system", "Sistem veritabanları"),
         ("settings", "Ayarlar: saklama ve temizlik"), ("https", "HTTPS sertifikası"), ("installation", "Kurulum"), ("alerts", "Alarmlar"), ("masking", "Veri koruma (maskeleme)"),
-        ("permission-check", "İzin kontrolü"), ("roles", "Roller ve yetkiler"), ("hangfire", "Hangfire paneli"), ("troubleshooting", "Durumlar ve sorun giderme")
+        ("permission-check", "İzin kontrolü"), ("roles", "Roller ve yetkiler"), ("hangfire", "Hangfire paneli"), ("monitoring", "Zaman çizelgesi, trendler ve pipeline'lar"), ("troubleshooting", "Durumlar ve sorun giderme")
     ];
 }

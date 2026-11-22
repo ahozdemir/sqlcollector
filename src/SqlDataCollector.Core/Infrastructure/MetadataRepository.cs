@@ -807,6 +807,41 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             """, new { kind, jobId, status, top })).AsList();
     }
 
+    /// <summary>Runs that were active at some point since <paramref name="fromUtc"/> (timeline), oldest first.</summary>
+    public async Task<IReadOnlyList<RunPoint>> GetRunsSinceAsync(DateTime fromUtc)
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<RunPoint>("""
+            SELECT 'Extract' AS Kind, ExtractJobId AS JobId, Status, StartedAtUtc, FinishedAtUtc, RowsLoaded AS [Rows], QualityStatus
+            FROM etl.LoadRun
+            WHERE FinishedAtUtc >= @fromUtc OR StartedAtUtc >= @fromUtc OR (FinishedAtUtc IS NULL AND Status = 'Running')
+            UNION ALL
+            SELECT 'Export', ExportJobId, Status, StartedAtUtc, FinishedAtUtc, RowsExported, CAST(NULL AS varchar(10))
+            FROM etl.ExportRun
+            WHERE FinishedAtUtc >= @fromUtc OR StartedAtUtc >= @fromUtc OR (FinishedAtUtc IS NULL AND Status = 'Running')
+            ORDER BY StartedAtUtc;
+            """, new { fromUtc })).AsList();
+    }
+
+    /// <summary>The last <paramref name="perJob"/> runs of every job (trends), oldest first per job.</summary>
+    public async Task<IReadOnlyList<RunPoint>> GetRecentRunsPerJobAsync(int perJob = 30)
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<RunPoint>("""
+            SELECT Kind, JobId, Status, StartedAtUtc, FinishedAtUtc, [Rows], QualityStatus FROM (
+                SELECT 'Extract' AS Kind, ExtractJobId AS JobId, Status, StartedAtUtc, FinishedAtUtc, RowsLoaded AS [Rows], QualityStatus,
+                       ROW_NUMBER() OVER (PARTITION BY ExtractJobId ORDER BY LoadRunId DESC) AS rn
+                FROM etl.LoadRun
+                UNION ALL
+                SELECT 'Export', ExportJobId, Status, StartedAtUtc, FinishedAtUtc, RowsExported, CAST(NULL AS varchar(10)),
+                       ROW_NUMBER() OVER (PARTITION BY ExportJobId ORDER BY ExportRunId DESC)
+                FROM etl.ExportRun
+            ) x
+            WHERE rn <= @perJob
+            ORDER BY Kind, JobId, StartedAtUtc;
+            """, new { perJob })).AsList();
+    }
+
     public async Task<IReadOnlyList<AuditRow>> GetAuditAsync(int top = 300)
     {
         await using var c = Conn();

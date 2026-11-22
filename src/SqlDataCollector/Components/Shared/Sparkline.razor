@@ -1,0 +1,52 @@
+@* Tiny trend line of a job's last runs (inline SVG, no script). The last point turns amber when it is far from the usual values;
+   a failed last run ends in a red ring. *@
+@if (points.Count == 0 && !LastFailed)
+{
+    <span class="text-muted small">–</span>
+}
+else
+{
+    <svg class="sdc-spark" width="@Width" height="@Height" viewBox="0 0 @Width @Height" role="img" aria-label="@Label">
+        <title>@Label</title>
+        @if (outlier && points.Count >= 2)
+        {
+            <polyline class="@LineClass" points="@ChartMath.Points(points.Take(points.Count - 1))" />
+            <polyline class="sdc-spark-warn" points="@ChartMath.Points(points.Skip(points.Count - 2))" />
+            <circle class="sdc-spark-warn-dot" cx="@X(points[^1])" cy="@Y(points[^1])" r="2.5" />
+        }
+        else if (points.Count > 0)
+        {
+            <polyline class="@LineClass" points="@ChartMath.Points(points)" />
+            @if (!LastFailed) { <circle class="@DotClass" cx="@X(points[^1])" cy="@Y(points[^1])" r="2.2" /> }
+        }
+        @if (LastFailed)
+        {
+            <circle class="sdc-spark-fail" cx="@(Width - 3.5)" cy="@(Height / 2.0)" r="3" />
+        }
+    </svg>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<double?> Values { get; set; } = [];
+    /// <summary>"rows" (blue) or "time" (gray).</summary>
+    [Parameter] public string Kind { get; set; } = "rows";
+    [Parameter] public int Width { get; set; } = 104;
+    [Parameter] public int Height { get; set; } = 22;
+    [Parameter] public bool LastFailed { get; set; }
+    [Parameter] public string Label { get; set; } = "";
+
+    private IReadOnlyList<(double X, double Y)> points = [];
+    private bool outlier;
+    private string LineClass => Kind == "time" ? "sdc-spark-time" : "sdc-spark-rows";
+    private string DotClass => Kind == "time" ? "sdc-spark-time-dot" : "sdc-spark-rows-dot";
+    private static string X((double X, double Y) p) => p.X.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    private static string Y((double X, double Y) p) => p.Y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    protected override void OnParametersSet()
+    {
+        // a failed last run has no value: draw the series up to it and leave room for the ring
+        var values = LastFailed && Values.Count > 0 ? Values.Take(Values.Count - 1).ToList() : Values;
+        points = ChartMath.Sparkline(values, LastFailed ? Width - 8 : Width, Height);
+        outlier = !LastFailed && ChartMath.LastIsOutlier(Values);
+    }
+}

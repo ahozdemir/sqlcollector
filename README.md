@@ -91,6 +91,14 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - Failed loads are rolled back; loads interrupted by a crash are cleaned up by the next sync
 - decimal(38,x) values are transferred exactly (`SqlDecimal`)
 
+**Monitoring views** (no external scripts – work without internet access)
+- **Run timeline** on Status: one lane per job, one bar per run (start, duration, outcome colour) for the last 6/12/24 hours
+  or 3 days, with the current time; jobs that run after other jobs are marked
+- **Trend lines** in the job table: rows and duration of the last 30 runs; the last point turns amber when it is under half or
+  over twice the median of the earlier runs, a red ring marks a failed last run
+- **Pipelines** page: exports and dependent jobs left to right with the jobs they wait for and the destinations; boxes in the
+  colour of the last run, dashed when a job waits for an upstream that has not succeeded
+
 **Import / export of job definitions** (*Jobs → Import / export*, CLI `jobs-export` / `jobs-import`)
 - Selected extract and export jobs (optionally with the jobs they run after), their quality checks and dependencies as one
   portable JSON file – environment promotion (test → production), backups, version control. Servers, destinations and

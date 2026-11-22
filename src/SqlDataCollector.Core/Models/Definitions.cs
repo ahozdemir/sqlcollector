@@ -163,6 +163,19 @@ public sealed class RunRow
     public string? QualityStatus { get; set; }
 }
 
+/// <summary>One run of a job for charts (timeline, trends): times, rows and outcome only.</summary>
+public sealed class RunPoint
+{
+    public string Kind { get; set; } = "";
+    public int JobId { get; set; }
+    public string Status { get; set; } = "";
+    public DateTime StartedAtUtc { get; set; }
+    public DateTime? FinishedAtUtc { get; set; }
+    public long? Rows { get; set; }
+    public string? QualityStatus { get; set; }   // nullable in DB: no default
+    public double? DurationSec => FinishedAtUtc is { } f ? (f - StartedAtUtc).TotalSeconds : null;
+}
+
 public sealed class JobStatusRow
 {
     public string JobKind { get; set; } = "";

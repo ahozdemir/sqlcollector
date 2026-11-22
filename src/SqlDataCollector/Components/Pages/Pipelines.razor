@@ -1,0 +1,126 @@
+@page "/pipelines"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+
+<PageTitle>Pipelines – SqlHarbor</PageTitle>
+
+<div class="d-flex align-items-center mb-3 gap-2">
+    <h1 class="h4 mb-0 me-auto">Pipelines <HelpLink Topic="monitoring" Title="Timeline, trends and pipelines" /></h1>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync">Refresh</button>
+</div>
+<p class="small text-muted">Which job waits for which, and where the exports upload their files. Colours show the last run; a dashed frame means the job is
+    waiting because a job it runs after has not succeeded yet. Click a box to open the job.</p>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2">@error</div> }
+
+@if (graph is null) { }
+else if (graph.Nodes.Count == 0)
+{
+    <div class="card"><div class="card-body small text-muted">No job runs after another job and there is no export yet. Pipelines appear here when an export or a job
+        with the trigger <i>After other jobs</i> exists.</div></div>
+}
+else
+{
+    <div class="sdc-legend mb-2">
+        <span><i class="ok"></i>succeeded</span><span><i class="warn"></i>partial / quality warning</span><span><i class="err"></i>failed</span>
+        <span><i class="run"></i>running</span><span><i class="wait"></i>waiting</span><span><i class="dest"></i>destination</span>
+    </div>
+    <div class="card"><div class="card-body p-2">
+        <div class="sdc-table-scroll mb-0">
+            <svg class="sdc-pipes" width="@N(graph.Width)" height="@N(graph.Height)" viewBox="0 0 @N(graph.Width) @N(graph.Height)" role="img" aria-label="Pipeline graph">
+                <defs>
+                    <marker id="pipe-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                        <path d="M0,0 L10,5 L0,10 z" class="sdc-pipe-arrow" />
+                    </marker>
+                </defs>
+                @foreach (var c in graph.Columns) { <g><text class="sdc-pipe-col" x="@N(c.X)" y="@N(PipelineLayout.Pad + 12)">@c.Title</text></g> }
+                @foreach (var e in graph.Edges)
+                {
+                    var a = nodes[e.From]; var b = nodes[e.To];
+                    double x1 = a.X + PipelineLayout.NodeW, y1 = a.Y + PipelineLayout.NodeH / 2, x2 = b.X - 2, y2 = b.Y + PipelineLayout.NodeH / 2, mx = (x1 + x2) / 2;
+                    <path class="sdc-pipe-edge @e.Tone @(e.Dashed ? "dashed" : "")" d="@($"M{N(x1)} {N(y1)} C {N(mx)} {N(y1)}, {N(mx)} {N(y2)}, {N(x2)} {N(y2)}")" marker-end="url(#pipe-arrow)" />
+                }
+                @foreach (var n in graph.Nodes)
+                {
+                    <g class="sdc-pipe-node @n.Tone">
+                        @if (n.Href is not null)
+                        {
+                            <a href="@n.Href">
+                                <title>@n.FullName</title>
+                                <rect x="@N(n.X)" y="@N(n.Y)" width="@N(PipelineLayout.NodeW)" height="@N(PipelineLayout.NodeH)" rx="6" />
+                                <text class="t" x="@N(n.X + 12)" y="@N(n.Y + 21)">@n.Label</text>
+                                <text class="s" x="@N(n.X + 12)" y="@N(n.Y + 39)">@n.Sub</text>
+                            </a>
+                        }
+                        else
+                        {
+                            <g>
+                                <title>@n.FullName</title>
+                                <rect x="@N(n.X)" y="@N(n.Y)" width="@N(PipelineLayout.NodeW)" height="@N(PipelineLayout.NodeH)" rx="6" />
+                                <text class="t" x="@N(n.X + 12)" y="@N(n.Y + 21)">@n.Label</text>
+                                <text class="s" x="@N(n.X + 12)" y="@N(n.Y + 39)">@n.Sub</text>
+                            </g>
+                        }
+                    </g>
+                }
+            </svg>
+        </div>
+    </div></div>
+    @if (graph.HiddenJobs > 0)
+    {
+        <div class="small text-muted mt-2">@graph.HiddenJobs extract job(s) run on their own schedule without dependents and are not shown; see <a href="/extract">Extract jobs</a>
+            (an export in <i>All collected tables</i> mode still exports their tables).</div>
+    }
+}
+
+@code {
+    private PipeGraph? graph;
+    private Dictionary<string, PipeNode> nodes = [];
+    private string? error;
+
+    /// <summary>"22:20" today, "21 Nov 22:20" before (display time zone).</summary>
+    private static string ShortTime(DateTime utc)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), Ui.Tz);
+        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ui.Tz).Date;
+        return local.ToString(local.Date == today ? "HH:mm" : "dd MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string N(double v) => v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        error = null;
+        try
+        {
+            var status = (await Repo.GetJobStatusAsync()).ToDictionary(s => new JobRef(s.JobKind, s.JobId));
+            var last = (await Repo.GetRecentRunsPerJobAsync(1)).ToDictionary(r => new JobRef(r.Kind, r.JobId));
+            var jobs = new List<PipeJob>();
+            foreach (var x in await Repo.GetExtractJobsAsync())
+            {
+                var r = new JobRef(JobRef.Extract, x.ExtractJobId);
+                jobs.Add(Job(r, x.Name, x.IsActive, x.TriggerMode == JobTriggerMode.AfterJobs, status, last, null, null));
+            }
+            foreach (var e in await Repo.GetExportJobsAsync())
+            {
+                var r = new JobRef(JobRef.Export, e.ExportJobId);
+                jobs.Add(Job(r, e.Name, e.IsActive, e.TriggerMode == JobTriggerMode.AfterJobs, status, last,
+                    e.DestinationName ?? $"gcs-{e.Bucket}", e.DestinationProvider ?? StorageProviders.Gcs));
+            }
+            var deps = (await Repo.GetJobDependenciesAsync()).Select(d => (new JobRef(d.JobKind, d.JobId), new JobRef(d.UpstreamKind, d.UpstreamId))).ToList();
+            graph = PipelineLayout.Build(jobs, deps, ShortTime);
+            nodes = graph.Nodes.ToDictionary(n => n.Id);
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private static PipeJob Job(JobRef r, string name, bool active, bool afterJobs, Dictionary<JobRef, JobStatusRow> status,
+        Dictionary<JobRef, RunPoint> last, string? destination, string? provider)
+    {
+        var s = status.GetValueOrDefault(r);
+        var l = last.GetValueOrDefault(r);
+        return new PipeJob(r, name, active, afterJobs, s?.LastStatus, l?.QualityStatus, s?.StartedAtUtc, s?.Rows, destination, provider);
+    }
+}

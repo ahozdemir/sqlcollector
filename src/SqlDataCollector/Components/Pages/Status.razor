@@ -68,23 +68,40 @@
     </div>
 </div>
 
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+            <div class="section-title me-auto">Run timeline <HelpLink Topic="monitoring" Title="Timeline, trends and pipelines" /></div>
+            <div class="sdc-legend">
+                <span><i class="ok"></i>succeeded</span><span><i class="warn"></i>partial / quality warning</span><span><i class="err"></i>failed</span><span><i class="run"></i>running</span>
+            </div>
+            <select class="form-select form-select-sm w-auto" @bind="rangeHours" @bind:after="LoadRunsAsync" aria-label="Period">
+                <option value="6">Last 6 hours</option><option value="12">Last 12 hours</option><option value="24">Last 24 hours</option><option value="72">Last 3 days</option>
+            </select>
+        </div>
+        <RunTimeline Jobs="rows" Runs="windowRuns" Dependencies="deps" FromUtc="fromUtc" ToUtc="toUtc" />
+    </div>
+</div>
+
 <div class="section-title mb-2 mt-4">Jobs – last run</div>
 <div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light">
-        <tr><th>Type</th><th>Job</th><th>Schedule</th><th>Last status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th>Error</th></tr>
+        <tr><th>Job</th><th>Schedule</th><th>Last status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th title="Rows of the last 30 runs">Rows trend</th><th title="Duration of the last 30 runs">Duration trend</th><th>Error</th></tr>
     </thead>
     <tbody>
         @foreach (var r in rows)
         {
             <tr class="@(r.IsActive ? "" : "text-muted")">
-                <td>@r.JobKind</td>
-                <td><a href="@(r.JobKind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")">@r.Name</a> @if (!r.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                <td class="sdc-nowrap"><a href="@(r.JobKind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")">@r.Name</a> @if (!r.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }<span class="sdc-sub">@r.JobKind</span></td>
                 <td><ScheduleCell Kind="@r.JobKind" JobId="r.JobId" Cron="@r.CronExpression" Dependencies="deps" /></td>
                 <td><StatusBadge Status="@r.LastStatus" /></td>
                 <td class="sdc-nowrap">@Ui.Local(r.StartedAtUtc)</td>
                 <td class="sdc-nowrap">@(r.StartedAtUtc is null ? "" : Ui.Duration(r.StartedAtUtc.Value, r.FinishedAtUtc))</td>
                 <td class="text-end">@r.Rows?.ToString("N0")</td>
-                <td class="small text-danger"><span class="sdc-clip" style="--sdc-clip-w: 11rem" title="@r.ErrorMessage">@Ui.ShortError(r.ErrorMessage)</span></td>
+                @{ var trend = Trend(r); }
+                <td><Sparkline Values="trend.Rows" LastFailed="trend.LastFailed" Kind="rows" Width="84" Label="@($"Rows of the last {trend.Rows.Count} runs")" /></td>
+                <td><Sparkline Values="trend.Durations" LastFailed="trend.LastFailed" Kind="time" Width="84" Label="@($"Duration of the last {trend.Durations.Count} runs (seconds)")" /></td>
+                <td class="small text-danger"><span class="sdc-clip" style="--sdc-clip-w: 9rem" title="@r.ErrorMessage">@Ui.ShortError(r.ErrorMessage)</span></td>
             </tr>
         }
     </tbody>
@@ -97,12 +114,37 @@
     private long enqueued, processing, failed;
     private int Problems => rows.Count(r => r.LastStatus is "Failed" or "PartiallyFailed" or "Abandoned" or "CleanupPending");
 
+    // timeline and trends
+    private int rangeHours = 24;
+    private DateTime fromUtc, toUtc;
+    private IReadOnlyList<RunPoint> windowRuns = [];
+    private ILookup<(string, int), RunPoint> recent = Array.Empty<RunPoint>().ToLookup(r => (r.Kind, r.JobId));
+    private static readonly (IReadOnlyList<double?> Rows, IReadOnlyList<double?> Durations, bool LastFailed) NoTrend = ([], [], false);
+
+    private (IReadOnlyList<double?> Rows, IReadOnlyList<double?> Durations, bool LastFailed) Trend(JobStatusRow r)
+    {
+        var runs = recent[(r.JobKind, r.JobId)].Where(x => x.Status != "Running").ToList();
+        if (runs.Count == 0) return NoTrend;
+        var failed = runs[^1].Status is "Failed" or "CleanupPending" or "Abandoned";
+        return (runs.Select(x => x.Status is "Failed" or "CleanupPending" or "Abandoned" ? null : (double?)x.Rows).ToList(),
+                runs.Select(x => x.DurationSec).ToList(), failed);
+    }
+
+    private async Task LoadRunsAsync()
+    {
+        toUtc = DateTime.UtcNow;
+        fromUtc = toUtc.AddHours(-rangeHours);
+        windowRuns = await Repo.GetRunsSinceAsync(fromUtc);
+    }
+
     protected override Task OnInitializedAsync() => LoadAsync();
 
     private async Task LoadAsync()
     {
         rows = await Repo.GetJobStatusAsync();
         deps = await Repo.GetJobDependenciesAsync();
+        recent = (await Repo.GetRecentRunsPerJobAsync(30)).ToLookup(x => (x.Kind, x.JobId));
+        await LoadRunsAsync();
         var mon = Storage.GetMonitoringApi();
         // any Hangfire server (ours or a shared host) that listens to at least one SqlDataCollector queue
         servers = mon.Servers().Where(s => s.Queues.Any(q => CollectorQueues.All.Contains(q, StringComparer.OrdinalIgnoreCase))).ToList();

@@ -501,6 +501,23 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
        diğer roller yalnızca görür. Job tanımları ve zamanlamalar ise yalnızca SqlHarbor ekranlarından değiştirilir.</p>
 </section>
 
+<section id="monitoring">
+    <h2>Zaman çizelgesi, trendler ve pipeline'lar</h2>
+    <ul>
+        <li><b>Run timeline</b> (Status): her job bir satır, her çalıştırma bir çubuk. Çubuk çalıştırmanın başladığı yerden başlar, sürdüğü kadar uzundur.
+            Yeşil başarılı, sarı kısmi hata veya kalite uyarısı, kırmızı hata, mavi hâlâ çalışıyor; dikey çizgi şu anı gösterir. 6, 12, 24 saat veya 3 gün seçilebilir.
+            Çubuğun üzerine gelince saatler, süre ve satır sayısı görünür; tıklayınca job açılır. <b>↳</b> başka job'lardan sonra çalışan job'ları işaretler.
+            Üst üste binen çubuklar aynı gece penceresini paylaşan job'ları, giderek uzayan bir çubuk da bakılması gereken bir job'u gösterir.</li>
+        <li><b>Trendler</b> (Status'taki job tablosu): son 30 çalıştırmanın satır sayısı ve süresi küçük çizgiler olarak. Son değer olağan değerin yarısından azsa
+            veya iki katından fazlaysa (önceki en az beş çalıştırmanın ortancası) son nokta sarıya döner; örneğin bir tablo birden dörtte bir satır getirdiğinde.
+            Kırmızı halka son çalıştırmanın hata verdiğini gösterir.</li>
+        <li><b>Pipelines</b> (menü): bütün export'lar ve başka job'lardan sonra çalışan job'lar, bekledikleri job'larla birlikte soldan sağa, en sağda da export'ların
+            dosya gönderdiği hedefler. Kutular son çalıştırmanın rengindedir; gri kesikli kutu <i>bekliyor</i> demektir: bağlı olduğu job'lardan biri henüz başarılı
+            olmamıştır (kutu hangisi olduğunu yazar). Pasif job'lar gridir. Bağımlılığı olmayan extract job'ları grafiğin altında sayı olarak belirtilir.</li>
+        <li>Hepsini uygulama kendisi çizer (harici script yok); internete kapalı sunucularda da çalışır.</li>
+    </ul>
+</section>
+
 <section id="troubleshooting">
     <h2>Durumlar ve sorun giderme</h2>
     <table class="table table-sm table-bordered bg-white">

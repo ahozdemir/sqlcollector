@@ -230,6 +230,11 @@
         <li>Look at <b>Status</b>: "Last run with problems" and the error column are the first clue. If "Workers online" is 0, the service is stopped – start it first.
             <GuideFigure Src="guide/status-overview.png" Caption="Status: workers online, active jobs and the outcome of the latest runs." />
         </li>
+        <li>The <b>Run timeline</b> on Status shows when the failed run happened and what else ran at the same time; the trend lines next to each job show whether
+            rows or duration had been drifting before. <b>Pipelines</b> shows which exports now wait for the failed job.
+            <GuideFigure Src="guide/status-timeline.png" Caption="Run timeline: one lane per job, bars coloured by outcome; hover a bar for its times and rows." />
+            <GuideFigure Src="guide/pipelines.png" Caption="Pipelines: jobs, the jobs they wait for and the destinations; a dashed box waits for a job that has not succeeded." />
+        </li>
         <li>Open the failed row in <b>Run history</b> for the message and details; the job name links to the job.
             <GuideFigure Src="guide/runs.png" Caption="Run history: status, duration, rows and details of every run." />
         </li>

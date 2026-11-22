@@ -194,3 +194,55 @@ a { text-decoration: none; }
 .guide-card span { font-size: .85rem; color: #6c757d; }
 .guide-meta { font-size: .85rem; color: #6c757d; margin-top: -.4rem; margin-bottom: .75rem; }
 .help-content .alert { font-size: .9rem; }
+
+/* ---------------------------------------------------------------- charts (inline SVG/HTML, no script)
+   status colours shared by the timeline, the pipeline view and their legends */
+:root { --sdc-ok: #1f9d6b; --sdc-warn: #e0a100; --sdc-err: #dc3545; --sdc-run: #0d6efd; --sdc-skip: #adb5bd; --sdc-dest: #0a58ca; }
+.sdc-legend { display: inline-flex; flex-wrap: wrap; gap: .25rem .9rem; font-size: .72rem; color: var(--sdc-muted); }
+.sdc-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: .3rem; vertical-align: -1px; }
+.sdc-legend i.ok { background: var(--sdc-ok); } .sdc-legend i.warn { background: var(--sdc-warn); } .sdc-legend i.err { background: var(--sdc-err); }
+.sdc-legend i.run { background: var(--sdc-run); } .sdc-legend i.wait { background: #fff; border: 1px dashed #868e96; } .sdc-legend i.dest { background: #e7f0ff; border: 1px solid var(--sdc-dest); }
+
+/* run timeline: one lane per job, one bar per run */
+.sdc-timeline { font-size: .8rem; }
+.sdc-tl-row { display: grid; grid-template-columns: minmax(120px, 210px) minmax(0, 1fr); column-gap: .75rem; align-items: center; }
+.sdc-tl-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: .15rem 0; }
+.sdc-tl-name a { font-weight: 500; }
+.sdc-tl-after { color: var(--sdc-muted); margin-left: .25rem; cursor: help; }
+.sdc-tl-track { position: relative; height: 22px; border-bottom: 1px solid #eef1f4; }
+.sdc-tl-axis .sdc-tl-track { height: 18px; border-bottom: 0; color: var(--sdc-muted); font-size: .68rem; }
+.sdc-tl-axis .sdc-tl-track span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.sdc-tl-grid { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #e6e9ed; }
+.sdc-tl-bar { position: absolute; top: 5px; height: 12px; border-radius: 3px; min-width: 3px; }
+.sdc-tl-bar:hover { outline: 2px solid rgba(13, 110, 253, .35); outline-offset: 1px; }
+.sdc-tl-bar.ok { background: var(--sdc-ok); } .sdc-tl-bar.warn { background: var(--sdc-warn); } .sdc-tl-bar.err { background: var(--sdc-err); }
+.sdc-tl-bar.run { background: var(--sdc-run); } .sdc-tl-bar.skip { background: var(--sdc-skip); }
+.sdc-tl-now { position: absolute; top: -2px; bottom: -2px; border-left: 2px solid var(--sdc-run); opacity: .55; pointer-events: none; }
+
+/* sparklines in job tables */
+.sdc-spark { display: block; overflow: visible; }
+.sdc-spark polyline { fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.sdc-spark-rows { stroke: var(--sdc-primary); } .sdc-spark-rows-dot { fill: var(--sdc-primary); }
+.sdc-spark-time { stroke: #8a929b; } .sdc-spark-time-dot { fill: #8a929b; }
+.sdc-spark-warn { stroke: var(--sdc-warn); } .sdc-spark-warn-dot { fill: var(--sdc-warn); }
+.sdc-spark-fail { fill: none; stroke: var(--sdc-err); stroke-width: 1.5; }
+
+/* pipeline graph */
+.sdc-pipes { display: block; font-family: inherit; }
+.sdc-pipe-col { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; fill: var(--sdc-muted); }
+.sdc-pipe-node rect { stroke-width: 1; }
+.sdc-pipe-node .t { font-size: 12.5px; font-weight: 600; }
+.sdc-pipe-node .s { font-size: 11px; }
+.sdc-pipe-node a { cursor: pointer; }
+.sdc-pipe-node a:hover rect { stroke-width: 2; }
+.sdc-pipe-node.ok rect { fill: #e8f5ee; stroke: var(--sdc-ok); } .sdc-pipe-node.ok .t { fill: #0f5132; } .sdc-pipe-node.ok .s { fill: #146c43; }
+.sdc-pipe-node.warn rect { fill: #fff4e0; stroke: var(--sdc-warn); } .sdc-pipe-node.warn .t { fill: #664d03; } .sdc-pipe-node.warn .s { fill: #997404; }
+.sdc-pipe-node.err rect { fill: #fdecec; stroke: var(--sdc-err); } .sdc-pipe-node.err .t { fill: #842029; } .sdc-pipe-node.err .s { fill: #b02a37; }
+.sdc-pipe-node.run rect { fill: #e7f0ff; stroke: var(--sdc-run); } .sdc-pipe-node.run .t { fill: #084298; } .sdc-pipe-node.run .s { fill: #0a58ca; }
+.sdc-pipe-node.wait rect { fill: #fff; stroke: #868e96; stroke-dasharray: 5 3; } .sdc-pipe-node.wait .t { fill: #343a40; } .sdc-pipe-node.wait .s { fill: #6c757d; }
+.sdc-pipe-node.muted rect { fill: #f8f9fa; stroke: #ced4da; } .sdc-pipe-node.muted .t { fill: #6c757d; } .sdc-pipe-node.muted .s { fill: #adb5bd; }
+.sdc-pipe-node.dest rect { fill: #e7f0ff; stroke: var(--sdc-dest); } .sdc-pipe-node.dest .t { fill: #052c65; } .sdc-pipe-node.dest .s { fill: #0a58ca; }
+.sdc-pipe-edge { fill: none; stroke-width: 1.6; stroke: #adb5bd; }
+.sdc-pipe-edge.ok { stroke: var(--sdc-ok); } .sdc-pipe-edge.warn { stroke: var(--sdc-warn); } .sdc-pipe-edge.err { stroke: var(--sdc-err); } .sdc-pipe-edge.run { stroke: var(--sdc-run); }
+.sdc-pipe-edge.dashed { stroke-dasharray: 5 4; }
+.sdc-pipe-arrow { fill: #868e96; }

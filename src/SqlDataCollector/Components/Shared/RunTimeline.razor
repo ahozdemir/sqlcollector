@@ -1,0 +1,77 @@
+@* Timeline of the runs in a window: one lane per job, one bar per run (position = start, length = duration, colour = outcome). *@
+@if (lanes.Count == 0)
+{
+    <div class="small text-muted py-2">No runs in this period.</div>
+}
+else
+{
+    <div class="sdc-timeline">
+        <div class="sdc-tl-row sdc-tl-axis">
+            <div></div>
+            <div class="sdc-tl-track">
+                @foreach (var (pct, label) in ticks) { <span style="left:@ChartMath.Pct(pct)">@label</span> }
+            </div>
+        </div>
+        @foreach (var lane in lanes)
+        {
+            <div class="sdc-tl-row">
+                <div class="sdc-tl-name" title="@lane.Name">
+                    <a href="@lane.Href">@lane.Name</a>
+                    @if (lane.After is not null) { <span class="sdc-tl-after" title="Starts after @lane.After">↳</span> }
+                </div>
+                <div class="sdc-tl-track">
+                    @foreach (var (pct, _) in ticks) { <span class="sdc-tl-grid" style="left:@ChartMath.Pct(pct)"></span> }
+                    @foreach (var bar in lane.Bars)
+                    {
+                        <a class="sdc-tl-bar @bar.Tone" href="@lane.Href" style="left:@ChartMath.Pct(bar.Left);width:@ChartMath.Pct(bar.Width)" title="@bar.Title"></a>
+                    }
+                    @if (nowPct is { } n) { <span class="sdc-tl-now" style="left:@ChartMath.Pct(n)"></span> }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<JobStatusRow> Jobs { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<RunPoint> Runs { get; set; } = [];
+    [Parameter] public IReadOnlyList<JobDependencyRow> Dependencies { get; set; } = [];
+    [Parameter, EditorRequired] public DateTime FromUtc { get; set; }
+    [Parameter, EditorRequired] public DateTime ToUtc { get; set; }
+
+    private sealed record Bar(double Left, double Width, string Tone, string Title);
+    private sealed record Lane(string Name, string Href, string? After, List<Bar> Bars, DateTime First);
+
+    private List<Lane> lanes = [];
+    private IReadOnlyList<(double Pct, string Label)> ticks = [];
+    private double? nowPct;
+
+    protected override void OnParametersSet()
+    {
+        var now = DateTime.UtcNow;
+        ticks = ChartMath.Ticks(FromUtc, ToUtc, Ui.Tz);
+        nowPct = ChartMath.Bar(now, now, FromUtc, ToUtc, now, 0) is { } p ? Math.Min(p.Left, 99.7) : null;
+        var jobs = Jobs.ToDictionary(j => (j.JobKind, j.JobId));
+        // runs of deleted jobs are left out (their history stays in Run history)
+        lanes = Runs.Where(r => jobs.ContainsKey((r.Kind, r.JobId))).GroupBy(r => (r.Kind, r.JobId))
+            .Select(g =>
+            {
+                var job = jobs.GetValueOrDefault(g.Key);
+                var name = job?.Name ?? $"{g.Key.Kind} #{g.Key.JobId}";
+                var bars = g.Select(r => ChartMath.Bar(r.StartedAtUtc, r.FinishedAtUtc, FromUtc, ToUtc, now) is { } b
+                        ? new Bar(b.Left, b.Width, ChartMath.Tone(r), Title(name, r)) : null)
+                    .Where(b => b is not null).Select(b => b!).ToList();
+                var ups = Dependencies.Where(d => d.JobKind == g.Key.Kind && d.JobId == g.Key.JobId).Select(d => d.UpstreamName ?? "").ToList();
+                var href = g.Key.Kind == JobRef.Extract ? $"/extract/{g.Key.JobId}" : $"/export/{g.Key.JobId}";
+                return new Lane(name, href, ups.Count > 0 ? string.Join(", ", ups) : null, bars, g.Min(r => r.StartedAtUtc));
+            })
+            .Where(l => l.Bars.Count > 0)
+            .OrderBy(l => l.First).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string Title(string name, RunPoint r) =>
+        $"{name} · {r.Status}{(r.QualityStatus is { } q ? $" · quality {q.ToLowerInvariant()}" : "")}\n" +
+        $"{Ui.Local(r.StartedAtUtc)} – {(r.FinishedAtUtc is null ? "running" : Ui.Local(r.FinishedAtUtc)[11..])} ({Ui.Duration(r.StartedAtUtc, r.FinishedAtUtc)})" +
+        (r.Rows is { } rows ? $" · {rows:N0} rows" : "");
+}

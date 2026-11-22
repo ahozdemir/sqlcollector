@@ -24,7 +24,8 @@ New-Item -ItemType Directory -Force -Path $outDir, $work | Out-Null
 $shots = @(
     @{ Name = "login";            Page = "/login";          H = 700;  X = 460; Y = 100; W = 520;  Ht = 300; Auth = $false },
     @{ Name = "status-overview";  Page = "/";               H = 1000; X = 256; Y = 64;  W = 1168; Ht = 210; Auth = $true },
-    @{ Name = "status-jobs";      Page = "/";               H = 1100; X = 256; Y = 440; W = 1168; Ht = 650; Auth = $true },
+    @{ Name = "status-timeline";  Page = "/";               H = 1100; X = 256; Y = 476; W = 1168; Ht = 394; Auth = $true },
+    @{ Name = "status-jobs";      Page = "/";               H = 1700; X = 256; Y = 886; W = 1168; Ht = 700; Auth = $true },
     @{ Name = "extract-source";   Page = "/extract/3";      H = 2400; X = 262; Y = 141; W = 568;  Ht = 700; Auth = $true },
     @{ Name = "extract-target";   Page = "/extract/3";      H = 2400; X = 834; Y = 141; W = 568;  Ht = 715; Auth = $true },
     @{ Name = "extract-trigger";  Page = "/extract/3";      H = 2400; X = 834; Y = 860; W = 568;  Ht = 368; Auth = $true },
@@ -37,6 +38,7 @@ $shots = @(
     @{ Name = "runs";             Page = "/runs";           H = 1000; X = 256; Y = 64;  W = 1168; Ht = 560; Auth = $true },
     @{ Name = "alerts";           Page = "/admin/alerts";   H = 1000; X = 256; Y = 64;  W = 1168; Ht = 560; Auth = $true },
     @{ Name = "destinations";     Page = "/admin/destinations"; H = 1000; X = 256; Y = 64; W = 1168; Ht = 400; Auth = $true },
+    @{ Name = "pipelines";        Page = "/pipelines";      H = 1000; X = 256; Y = 64;  W = 1168; Ht = 600; Auth = $true },
     @{ Name = "transfer";         Page = "/transfer";       H = 1000; X = 256; Y = 64;  W = 1168; Ht = 900; Auth = $true },
     @{ Name = "settings-gcs";     Page = "/admin/settings"; H = 1400; X = 262; Y = 728; W = 1141; Ht = 261; Auth = $true }
 )
