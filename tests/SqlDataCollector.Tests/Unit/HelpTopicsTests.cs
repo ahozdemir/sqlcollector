@@ -50,6 +50,15 @@ public class HelpTopicsTests
         Assert.NotEmpty(scenarios);
         Missing("English guide", scenarios.Where(s => !en.Contains(s)));
         Missing("Turkish guide", scenarios.Where(s => !tr.Contains(s)));
+        // the page indexes the card summaries by scenario id: a missing one breaks the whole Guide page (HTTP 500)
+        var guidePage = File.ReadAllText(Path.Combine(pages, "Guide.razor"));
+        foreach (var (name, dict) in new[] { ("English card summaries", "SummaryEn"), ("Turkish card summaries", "SummaryTr") })
+        {
+            var block = Regex.Match(guidePage, dict + @"\s*=\s*new\(\)\s*\{(?<body>.*?)\};", RegexOptions.Singleline).Groups["body"].Value;
+            var keys = Regex.Matches(block, "\\[\"([a-z0-9-]+)\"\\]").Select(m => m.Groups[1].Value).ToHashSet();
+            Assert.NotEmpty(keys);
+            Missing(name, scenarios.Where(s => !keys.Contains(s)));
+        }
 
         var wwwroot = Path.Combine(RepoRoot(), "src", "SqlDataCollector", "wwwroot");
         var reference = Ids(Path.Combine(pages, "Help.razor")).Concat(Ids(Path.Combine(pages, "HelpTr.razor"))).ToHashSet();

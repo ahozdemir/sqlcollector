@@ -10,7 +10,7 @@
     @if (canEdit) { <a class="btn btn-sm btn-primary" href="/export/new">+ New export</a> }
 </div>
 
-<table class="table table-sm table-hover bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light">
         <tr><th>Name</th><th>Source</th><th>Mode</th><th>Destination</th><th>Format</th><th>Schedule</th><th>Modified by</th></tr>
     </thead>
@@ -18,17 +18,17 @@
         @foreach (var e in jobs)
         {
             <tr class="@(e.IsActive ? "" : "text-muted")">
-                <td><a href="/export/@e.ExportJobId">@e.Name</a> @if (!e.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
-                <td class="mono">@e.SourceServerName / @e.SourceDatabase / @(e.ExportMode switch { ExportMode.Query => "(query)", ExportMode.AllTables => $"(all collected tables{(string.IsNullOrEmpty(e.SourceSchema) ? "" : " in " + e.SourceSchema)})", _ => $"{e.SourceSchema}.{e.SourceTable}" })</td>
+                <td class="sdc-nowrap"><a href="/export/@e.ExportJobId">@e.Name</a> @if (!e.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                <td class="mono sdc-nowrap">@(e.ExportMode switch { ExportMode.Query => "(query)", ExportMode.AllTables => $"(all collected tables{(string.IsNullOrEmpty(e.SourceSchema) ? "" : " in " + e.SourceSchema)})", _ => $"{e.SourceSchema}.{e.SourceTable}" })<span class="sdc-sub">@e.SourceServerName / @e.SourceDatabase</span></td>
                 <td>@e.ExportMode</td>
-                <td class="small"><b>@(e.DestinationName ?? "gcs-" + e.Bucket)</b> <span class="text-muted">(@(e.DestinationProvider == StorageProviders.AzureBlob ? "Azure" : e.DestinationProvider ?? "Gcs"))</span><br /><span class="mono">@e.ObjectNameTemplate</span></td>
-                <td class="small">@(e.FileFormat == ExportFileFormat.Parquet ? $"Parquet · {e.ParquetCompression.ToLowerInvariant()}" : $"CSV {(e.Delimiter == "\t" ? "TAB" : e.Delimiter)}{(e.Gzip ? " · gzip" : "")}") @(e.MaxRowsPerFile is null ? "" : $"· {e.MaxRowsPerFile:N0}/file")</td>
+                <td class="small"><span class="sdc-nowrap"><b>@(e.DestinationName ?? "gcs-" + e.Bucket)</b> <span class="text-muted">(@(e.DestinationProvider == StorageProviders.AzureBlob ? "Azure" : e.DestinationProvider ?? "Gcs"))</span></span><span class="mono sdc-clip text-muted" style="--sdc-clip-w: 13rem" title="@e.ObjectNameTemplate">@e.ObjectNameTemplate</span></td>
+                <td class="small sdc-nowrap">@(e.FileFormat == ExportFileFormat.Parquet ? $"Parquet · {e.ParquetCompression.ToLowerInvariant()}" : $"CSV {(e.Delimiter == "\t" ? "TAB" : e.Delimiter)}{(e.Gzip ? " · gzip" : "")}")@if (e.MaxRowsPerFile is not null) { <span class="sdc-sub">@($"{e.MaxRowsPerFile:N0} rows/file")</span> }</td>
                 <td><ScheduleCell Kind="@JobRef.Export" JobId="e.ExportJobId" Cron="@e.CronExpression" AfterJobs="@(e.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
-                <td class="small">@e.ModifiedBy<br /><span class="text-muted">@Ui.Local(e.ModifiedAtUtc)</span></td>
+                <td class="small"><span class="sdc-clip" style="--sdc-clip-w: 10rem" title="@e.ModifiedBy">@e.ModifiedBy</span><span class="sdc-sub">@Ui.Local(e.ModifiedAtUtc)</span></td>
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 
 @code {
     private IReadOnlyList<ExportJobDef> jobs = [];

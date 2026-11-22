@@ -20,19 +20,19 @@
     <div class="section-title me-auto">Destinations</div>
     <button class="btn btn-sm btn-primary" @onclick="() => Edit(new DestinationDef())">+ New destination</button>
 </div>
-<table class="table table-sm table-hover bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light"><tr><th>Name</th><th>Provider</th><th>Bucket / container</th><th>Endpoint / region</th><th>Authentication</th><th>Used by</th><th>State</th><th>Test</th><th></th></tr></thead>
     <tbody>
         @if (destinations.Count == 0) { <tr><td colspan="9" class="small text-muted">No destination yet.</td></tr> }
         @foreach (var d in destinations)
         {
             <tr class="@(d.IsActive ? "" : "text-muted")">
-                <td>@d.Name</td>
+                <td class="sdc-nowrap">@d.Name</td>
                 <td class="small">@StorageProviders.Describe(d.Provider)</td>
                 <td class="mono small">@d.Bucket</td>
-                <td class="mono small">@(d.Endpoint ?? d.Region ?? "default")</td>
+                <td class="mono small"><span class="sdc-clip" style="--sdc-clip-w: 13rem" title="@(d.Endpoint ?? d.Region)">@(d.Endpoint ?? d.Region ?? "default")</span></td>
                 <td class="small">@AuthText(d.Provider, d.AuthMethod)@(d.HasSecret ? " · key stored" : "")</td>
-                <td class="small">@(usage.TryGetValue(d.DestinationId, out var n) ? $"{n} job(s)" : "–")</td>
+                <td class="small sdc-nowrap">@(usage.TryGetValue(d.DestinationId, out var n) ? $"{n} job(s)" : "–")</td>
                 <td>@(d.IsActive ? "Active" : "Inactive")</td>
                 <td class="small" style="max-width: 320px">
                     @if (tests.TryGetValue(d.DestinationId, out var t)) { <span class="@(t.Ok ? "text-success" : "text-danger")">@t.Message</span> }
@@ -45,7 +45,7 @@
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 
 @if (editing is not null)
 {
@@ -124,7 +124,7 @@
             </div>
             <div class="col-12 small text-muted">@Hint(d)</div>
         </div>
-        <div class="d-flex gap-2 mt-2">
+        <div class="d-flex flex-wrap gap-2 mt-2">
             <button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save</button>
             <button class="btn btn-sm btn-link" @onclick="() => { editing = null; newSecret = null; }">Cancel</button>
             @if (d.DestinationId != 0) { <span class="ms-auto"></span><button class="btn btn-sm btn-outline-danger" @onclick="DeleteAsync">Delete</button> }

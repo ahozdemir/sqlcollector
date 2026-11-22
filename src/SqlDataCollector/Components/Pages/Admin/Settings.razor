@@ -25,14 +25,14 @@
         <div class="section-title mb-2">Retention policy for collected data</div>
         <div class="row g-3">
             <div class="col-md-3">
-                <label class="form-label small">Default retention (days) @Origin(SystemSettingsService.DefaultDaysKey)</label>
+                <label class="form-label small sdc-label-line">Default retention (days)</label>
                 <input type="number" min="1" class="form-control form-control-sm" @bind="form.DefaultDays" placeholder="none" />
-                <div class="form-text">Pre-filled in new extract jobs.</div>
+                <div class="form-text">@Origin(SystemSettingsService.DefaultDaysKey) Pre-filled in new extract jobs.</div>
             </div>
             <div class="col-md-3">
-                <label class="form-label small">Maximum retention (days) @Origin(SystemSettingsService.MaxDaysKey)</label>
+                <label class="form-label small sdc-label-line">Maximum retention (days)</label>
                 <input type="number" min="1" class="form-control form-control-sm" @bind="form.MaxDays" placeholder="no maximum" />
-                <div class="form-text">Enforced on save; longer retentions of existing jobs are capped by the retention job.</div>
+                <div class="form-text">@Origin(SystemSettingsService.MaxDaysKey) Enforced on save; longer retentions of existing jobs are capped by the retention job.</div>
             </div>
             <div class="col-md-6 d-flex flex-column gap-2 small pt-4">
                 <div class="form-check"><input class="form-check-input" type="checkbox" id="kf" @bind="form.AllowKeepForever" />
@@ -47,22 +47,24 @@
         <div class="section-title mt-4 mb-2">Schedule and housekeeping</div>
         <div class="row g-3">
             <div class="col-md-3">
-                <label class="form-label small">Retention schedule (cron) @Origin(SystemSettingsService.CronKey)</label>
+                <label class="form-label small sdc-label-line">Retention schedule (cron)</label>
                 <input class="form-control form-control-sm mono" @bind="form.Cron" />
-                <div class="form-text">@CronInfo()</div>
+                <div class="form-text">@Origin(SystemSettingsService.CronKey) @CronInfo()</div>
             </div>
             <div class="col-md-3">
-                <label class="form-label small">Run history (days) @Origin(SystemSettingsService.RunLogDaysKey)</label>
+                <label class="form-label small sdc-label-line">Run history (days)</label>
                 <input type="number" min="1" class="form-control form-control-sm" @bind="form.RunLogDays" />
-                <div class="form-text">etl.LoadRun / etl.ExportRun</div>
+                <div class="form-text">@Origin(SystemSettingsService.RunLogDaysKey) etl.LoadRun / etl.ExportRun</div>
             </div>
             <div class="col-md-3">
-                <label class="form-label small">Audit log (days) @Origin(SystemSettingsService.AuditDaysKey)</label>
+                <label class="form-label small sdc-label-line">Audit log (days)</label>
                 <input type="number" min="1" class="form-control form-control-sm" @bind="form.AuditDays" />
+                <div class="form-text">@Origin(SystemSettingsService.AuditDaysKey)</div>
             </div>
             <div class="col-md-3">
-                <label class="form-label small">Permission check results (days) @Origin(SystemSettingsService.PermissionCheckDaysKey)</label>
+                <label class="form-label small sdc-label-line">Permission check results (days)</label>
                 <input type="number" min="1" class="form-control form-control-sm" @bind="form.PermissionCheckDays" />
+                <div class="form-text">@Origin(SystemSettingsService.PermissionCheckDaysKey)</div>
             </div>
         </div>
         <div class="mt-3"><button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save settings</button></div>

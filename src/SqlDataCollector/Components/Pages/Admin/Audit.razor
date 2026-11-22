@@ -4,18 +4,18 @@
 
 <PageTitle>Audit</PageTitle>
 <h1 class="h4 mb-3">Audit log (last 300 entries)</h1>
-<table class="table table-sm bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm bg-white">
     <thead class="table-light"><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Id</th><th>Details</th></tr></thead>
     <tbody>
         @foreach (var a in rows)
         {
             <tr>
-                <td class="text-nowrap">@Ui.Local(a.AtUtc)</td><td>@a.UserName</td><td>@a.Action</td><td>@a.Entity</td><td>@a.EntityId</td>
-                <td class="mono small text-truncate" style="max-width:600px" title="@a.Details">@a.Details</td>
+                <td class="text-nowrap">@Ui.Local(a.AtUtc)</td><td class="sdc-nowrap">@a.UserName</td><td>@a.Action</td><td>@a.Entity</td><td>@a.EntityId</td>
+                <td class="mono small"><span class="sdc-clip" style="--sdc-clip-w: 19rem" title="@a.Details">@a.Details</span></td>
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 @code {
     private IReadOnlyList<AuditRow> rows = [];
     protected override async Task OnInitializedAsync() => rows = await Repo.GetAuditAsync();

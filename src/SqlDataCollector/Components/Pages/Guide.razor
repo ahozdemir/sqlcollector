@@ -58,9 +58,10 @@
         ("when-it-fails", "A job failed: what now?", "Bir job hata verdi: ne yapmalı?")
     ];
 
-    private static readonly Dictionary<string, string> SummaryEn = new()
+    /// <summary>One-line card text per scenario (every scenario needs one in both languages; checked by a test).</summary>
+    public static readonly Dictionary<string, string> SummaryEn = new()
     {
-        ["first-steps"] = "Password, GCS key, certificate, servers – in this order.",
+        ["first-steps"] = "Password, destinations, certificate, servers – in this order.",
         ["nightly-table"] = "Source, target, load mode and schedule of a first extract job.",
         ["large-tables"] = "Read only what changed and keep one row per key.",
         ["nightly-export"] = "One export that starts when the extracts are done.",
@@ -68,12 +69,13 @@
         ["trust-the-data"] = "Automatic integrity checks plus your own quality rules.",
         ["get-alerted"] = "E-mail or Teams for failures, missed runs and bad data.",
         ["access"] = "Roles for AD groups and which databases they may use.",
+        ["move-jobs"] = "Download jobs as a file and import them elsewhere, checked first.",
         ["when-it-fails"] = "Find the reason quickly and run the job again."
     };
 
-    private static readonly Dictionary<string, string> SummaryTr = new()
+    public static readonly Dictionary<string, string> SummaryTr = new()
     {
-        ["first-steps"] = "Şifre, GCS anahtarı, sertifika, sunucular – bu sırayla.",
+        ["first-steps"] = "Şifre, export hedefleri, sertifika, sunucular – bu sırayla.",
         ["nightly-table"] = "İlk extract job'ın kaynağı, hedefi, yükleme modu ve zamanlaması.",
         ["large-tables"] = "Yalnızca değişeni okumak ve her anahtar için tek satır tutmak.",
         ["nightly-export"] = "Extract'ler bitince kendiliğinden başlayan tek bir export.",
@@ -81,6 +83,7 @@
         ["trust-the-data"] = "Otomatik bütünlük kontrolü ve kendi kalite kurallarınız.",
         ["get-alerted"] = "Hata, kaçırılan çalışma ve hatalı veri için e-posta veya Teams.",
         ["access"] = "AD gruplarına rol ve hangi veritabanlarını kullanabilecekleri.",
+        ["move-jobs"] = "Job'ları dosya olarak indirip başka kuruluma önce kontrol ederek almak.",
         ["when-it-fails"] = "Nedeni hızla bulmak ve job'ı yeniden çalıştırmak."
     };
 

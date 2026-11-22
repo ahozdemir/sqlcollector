@@ -50,7 +50,7 @@
                 <tr>
                     <td><a href="/extract/@s.Job.ExtractJobId">@s.Job.Name</a></td>
                     <td>@s.Job.FreshnessHours h</td>
-                    <td>@(s.Last is null ? "never" : $"{Ui.Local(s.Last)} ({(DateTime.UtcNow - s.Last.Value).TotalHours:N1} h ago)")</td>
+                    <td class="sdc-nowrap">@(s.Last is null ? "never" : $"{Ui.Local(s.Last)} ({(DateTime.UtcNow - s.Last.Value).TotalHours:N1} h ago)")</td>
                 </tr>
             }
         </tbody>
@@ -65,7 +65,7 @@
         @foreach (var (check, last) in Rows)
         {
             <tr class="@(check.IsActive ? "" : "text-muted")">
-                <td><a href="/extract/@check.ExtractJobId">@JobName(check.ExtractJobId)</a></td>
+                <td class="sdc-nowrap"><a href="/extract/@check.ExtractJobId">@JobName(check.ExtractJobId)</a></td>
                 <td class="small">@QualityRules.Describe(check)</td>
                 <td class="small">@check.Severity</td>
                 <td>@if (last is null) { <span class="text-muted small">not run yet</span> } else { <StatusBadge Status="@last.Status" /> }</td>

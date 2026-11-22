@@ -9,7 +9,7 @@
 @if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2">@error</div> }
 
 <div class="row g-3">
-    <div class="col-xl-5">
+    <div class="col-12">
         <div class="card"><div class="card-body">
             <div class="section-title mb-2">Roles</div>
             <p class="small text-muted mb-2">
@@ -21,21 +21,21 @@
                 <tbody>
                     @foreach (var r in roles)
                     {
-                        <tr><td class="mono">@r.PrincipalName</td><td>@(r.PrincipalType == "G" ? "Group" : "User")</td><td>@r.Role</td>
+                        <tr><td class="mono sdc-nowrap">@r.PrincipalName</td><td>@(r.PrincipalType == "G" ? "Group" : "User")</td><td>@r.Role</td>
                             <td><button class="btn btn-sm btn-link text-danger p-0" @onclick="() => DeleteRoleAsync(r)">remove</button></td></tr>
                     }
                 </tbody>
             </table>
-            <div class="row g-1">
-                <div class="col-6"><input class="form-control form-control-sm mono" placeholder="DOMAIN\group" @bind="newRole.PrincipalName" /></div>
-                <div class="col-2"><select class="form-select form-select-sm" @bind="newRole.PrincipalType"><option value="G">Group</option><option value="U">User</option></select></div>
-                <div class="col-2"><select class="form-select form-select-sm" @bind="newRole.Role">@foreach (var r in AppRoles.All) { <option>@r</option> }</select></div>
-                <div class="col-2"><button class="btn btn-sm btn-primary w-100" @onclick="AddRoleAsync">Add</button></div>
+            <div class="row g-2" style="max-width: 760px">
+                <div class="col-sm-5"><input class="form-control form-control-sm mono" placeholder="DOMAIN\group" @bind="newRole.PrincipalName" aria-label="Principal" /></div>
+                <div class="col-sm-3"><select class="form-select form-select-sm" @bind="newRole.PrincipalType"><option value="G">Group</option><option value="U">User</option></select></div>
+                <div class="col-sm-2"><select class="form-select form-select-sm" @bind="newRole.Role" aria-label="Role">@foreach (var r in AppRoles.All) { <option>@r</option> }</select></div>
+                <div class="col-sm-2"><button class="btn btn-sm btn-primary w-100" @onclick="AddRoleAsync">Add</button></div>
             </div>
         </div></div>
     </div>
 
-    <div class="col-xl-7">
+    <div class="col-12">
         <div class="card"><div class="card-body">
             <div class="section-title mb-2">Server / database permissions (for Editor and Viewer)</div>
             <p class="small text-muted mb-2">Users only see and can select permitted servers and databases. Empty database = all databases on that server. Not needed for Admins.</p>
@@ -44,14 +44,14 @@
                 <tbody>
                     @foreach (var p in perms)
                     {
-                        <tr><td class="mono">@p.PrincipalName</td><td>@p.ServerName</td><td class="mono">@(p.DatabaseName ?? "(all)")</td>
+                        <tr><td class="mono sdc-nowrap">@p.PrincipalName</td><td class="sdc-nowrap">@p.ServerName</td><td class="mono">@(p.DatabaseName ?? "(all)")</td>
                             <td>@(p.CanSource ? "✓" : "")</td><td>@(p.CanTarget ? "✓" : "")</td>
                             <td><button class="btn btn-sm btn-link text-danger p-0" @onclick="() => DeletePermAsync(p)">remove</button></td></tr>
                     }
                 </tbody>
             </table>
-            <div class="row g-1 align-items-center">
-                <div class="col-md-3"><input class="form-control form-control-sm mono" placeholder="DOMAIN\group" @bind="newPerm.PrincipalName" /></div>
+            <div class="row g-2 align-items-center" style="max-width: 1100px">
+                <div class="col-md-3"><input class="form-control form-control-sm mono" placeholder="DOMAIN\group" @bind="newPerm.PrincipalName" aria-label="Principal" /></div>
                 <div class="col-md-3">
                     <select class="form-select form-select-sm" @bind="newPerm.SqlServerId" @bind:after="PermServerChanged">
                         <option value="0">Server…</option>
@@ -64,7 +64,7 @@
                         @foreach (var d in permDbs) { <option value="@d">@d</option> }
                     </select>
                 </div>
-                <div class="col-md-2 small">
+                <div class="col-md-2 small sdc-nowrap">
                     <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="pcs" @bind="newPerm.CanSource" /><label class="form-check-label" for="pcs">Source</label></div>
                     <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="pct" @bind="newPerm.CanTarget" /><label class="form-check-label" for="pct">Target</label></div>
                 </div>

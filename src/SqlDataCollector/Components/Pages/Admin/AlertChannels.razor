@@ -40,14 +40,14 @@
     <div class="section-title me-auto">Channels</div>
     <button class="btn btn-sm btn-primary" @onclick="New">+ New channel</button>
 </div>
-<table class="table table-sm table-hover bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light"><tr><th>Name</th><th>Type</th><th>Destination</th><th>Events</th><th>Jobs</th><th>State</th><th>Test</th><th></th></tr></thead>
     <tbody>
         @if (channels.Count == 0) { <tr><td colspan="8" class="text-muted small">No channel yet – alerts only go to jobs' Notify addresses.</td></tr> }
         @foreach (var c in channels)
         {
             <tr class="@(c.IsActive ? "" : "text-muted")">
-                <td>@c.Name</td>
+                <td class="sdc-nowrap">@c.Name</td>
                 <td>@c.ChannelType</td>
                 <td class="mono small">@AlertFormat.MaskTarget(c.ChannelType, c.Target)</td>
                 <td class="small">@c.Statuses.Replace(",", ", ")</td>
@@ -61,7 +61,7 @@
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 
 @if (editing is not null)
 {
@@ -121,14 +121,14 @@
 }
 
 <div class="section-title mt-4 mb-1">Recent deliveries</div>
-<table class="table table-sm small bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm small bg-white">
     <thead class="table-light"><tr><th>Created</th><th>Event</th><th>Job</th><th>Destination</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
     <tbody>
         @if (deliveries.Count == 0) { <tr><td colspan="7" class="text-muted">Nothing sent yet.</td></tr> }
         @foreach (var d in deliveries)
         {
             <tr>
-                <td>@Ui.Local(d.CreatedAtUtc)</td>
+                <td class="sdc-nowrap">@Ui.Local(d.CreatedAtUtc)</td>
                 <td>@d.EventType</td>
                 <td>@d.JobName <span class="text-muted">(@d.JobKind)</span></td>
                 <td>@d.Destination</td>
@@ -138,7 +138,7 @@
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 
 @code {
     private IReadOnlyList<AlertChannelDef> channels = [];

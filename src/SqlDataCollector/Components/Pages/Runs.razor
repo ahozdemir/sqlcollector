@@ -16,7 +16,7 @@
     <button class="btn btn-sm btn-outline-secondary" @onclick="LoadAsync">Refresh</button>
 </div>
 
-<table class="table table-sm table-hover bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light">
         <tr><th>#</th><th>Type</th><th>Job</th><th>Status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th>Detail</th><th>Triggered by</th></tr>
     </thead>
@@ -28,11 +28,11 @@
                 <td>@r.Kind</td>
                 <td><a href="@(r.Kind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")" @onclick:stopPropagation>@r.JobName</a></td>
                 <td class="text-nowrap"><StatusBadge Status="@r.Status" /> @if (r.QualityStatus is not null) { <a href="@($"/extract/{r.JobId}")" title="Data quality of this load"><span class="sdc-status @(r.QualityStatus == "Passed" ? "ok" : r.QualityStatus == "Warning" ? "warn" : "err")">quality: @r.QualityStatus.ToLowerInvariant()</span></a> }</td>
-                <td>@Ui.Local(r.StartedAtUtc)</td>
-                <td>@Ui.Duration(r.StartedAtUtc, r.FinishedAtUtc)</td>
+                <td class="sdc-nowrap">@Ui.Local(r.StartedAtUtc)</td>
+                <td class="sdc-nowrap">@Ui.Duration(r.StartedAtUtc, r.FinishedAtUtc)</td>
                 <td class="text-end">@r.Rows?.ToString("N0")</td>
-                <td class="small mono text-truncate" style="max-width:420px">@(r.Detail?.Split('\n')[0])</td>
-                <td class="small">@(r.TriggeredBy ?? "schedule")</td>
+                <td class="small mono"><span class="sdc-clip" style="--sdc-clip-w: 9rem" title="@r.Detail">@(r.Detail?.Split('\n')[0])</span></td>
+                <td class="small"><span class="sdc-clip" style="--sdc-clip-w: 8rem" title="@r.TriggeredBy">@(r.TriggeredBy ?? "schedule")</span></td>
             </tr>
             @if (expanded == r.Kind + r.RunId && (r.ErrorMessage is not null || r.Detail?.Contains('\n') == true))
             {
@@ -43,7 +43,7 @@
             }
         }
     </tbody>
-</table>
+</table></div>
 
 @code {
     private IReadOnlyList<RunRow> rows = [];

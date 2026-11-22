@@ -35,7 +35,7 @@
     <div class="section-title me-auto">Masking rules</div>
     <button class="btn btn-sm btn-primary" @onclick="() => Edit(new MaskingRule())">+ New rule</button>
 </div>
-<table class="table table-sm table-hover bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light"><tr><th>Name</th><th>Columns</th><th>Scope</th><th>Method</th><th>Applies to</th><th>State</th><th>Example</th><th></th></tr></thead>
     <tbody>
         @if (rules.Count == 0) { <tr><td colspan="8" class="text-muted small">No rule yet. Run a scan below to find columns with personal data.</td></tr> }
@@ -53,7 +53,7 @@
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 
 @if (editing is not null)
 {
@@ -104,7 +104,7 @@
                 }
             </div>
         </div>
-        <div class="d-flex gap-2 mt-2">
+        <div class="d-flex flex-wrap gap-2 mt-2">
             <button class="btn btn-sm btn-primary" @onclick="SaveRuleAsync">Save</button>
             <button class="btn btn-sm btn-link" @onclick="() => editing = null">Cancel</button>
             @if (editing.MaskingRuleId != 0)
@@ -142,7 +142,7 @@
     </div>
     @if (findings is not null)
     {
-        <table class="table table-sm bg-white mt-3 mb-0">
+        <div class="sdc-table-scroll mb-0"><table class="table table-sm bg-white mt-3 mb-0">
             <thead class="table-light"><tr><th>Table</th><th>Column</th><th>Looks like</th><th class="text-end">Sample match</th><th>Example</th><th>Masked by</th><th></th></tr></thead>
             <tbody>
                 @if (findings.Count == 0) { <tr><td colspan="7" class="text-muted small">No personal data found in the sampled rows.</td></tr> }
@@ -159,7 +159,7 @@
                     </tr>
                 }
             </tbody>
-        </table>
+        </table></div>
     }
 </div></div>
 

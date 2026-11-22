@@ -22,7 +22,7 @@
 
 @* ------------------------------------------------------------ system databases *@
 <div class="section-title mt-3 mb-1">System databases <span class="small text-muted fw-normal">– from configuration, read-only</span> <HelpLink Topic="servers-system" Title="System databases" /></div>
-<table class="table table-sm bg-white mb-1">
+<div class="sdc-table-scroll mb-0"><table class="table table-sm bg-white mb-1">
     <thead class="table-light"><tr><th style="width:130px">Purpose</th><th>Server</th><th>Database</th><th>Authentication</th><th>Settings</th></tr></thead>
     <tbody>
         <tr>
@@ -44,7 +44,7 @@
             </td>
         </tr>
     </tbody>
-</table>
+</table></div>
 <p class="small text-muted mb-4">Shown as configured for this Web process (<span class="mono">ConnectionStrings:Metadata</span>, <span class="mono">ConnectionStrings:Hangfire</span>,
     <span class="mono">Collector:*</span>); Workers use their own configuration file. The application needs these connections to start,
     so they are changed in appsettings (samples in <span class="mono">deploy/</span>) followed by a service restart – not here.</p>
@@ -140,23 +140,23 @@
         }
         else
         {
-            <table class="table table-sm mb-0 small">
+            <div class="sdc-table-scroll mb-0"><table class="table table-sm mb-0 small">
                 <thead class="table-light"><tr><th>Category</th><th>Server</th><th>Database</th><th>Login</th><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
                 <tbody>
                     @foreach (var r in visible)
                     {
                         <tr>
                             <td>@r.Category</td>
-                            <td class="mono">@r.ServerName</td>
-                            <td class="mono">@(r.DatabaseName ?? "–")</td>
-                            <td class="mono">@(r.LoginName ?? "–")</td>
+                            <td class="mono sdc-nowrap">@r.ServerName</td>
+                            <td class="mono sdc-nowrap">@(r.DatabaseName ?? "–")</td>
+                            <td class="mono sdc-nowrap">@(r.LoginName ?? "–")</td>
                             <td>@r.Item</td>
                             <td><span class="@Ui.CheckStatusClass(r.Status)">@r.Status</span></td>
-                            <td style="max-width:520px">@r.Detail</td>
+                            <td style="min-width: 18rem">@r.Detail</td>
                         </tr>
                     }
                 </tbody>
-            </table>
+            </table></div>
         }
     </div></div>
 }
@@ -185,7 +185,7 @@
     }
 
     private RenderFragment<(List<SqlServerDef> List, bool Target)> ServerTable => args =>
-        @<table class="table table-sm table-hover bg-white">
+        @<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
             <thead class="table-light"><tr><th>Name</th><th>Address</th><th>Used by</th><th>Connection</th><th>State</th><th>Test</th><th></th></tr></thead>
             <tbody>
                 @if (args.List.Count == 0)
@@ -199,8 +199,8 @@
                     <tr class="@(s.IsActive ? "" : "text-muted")">
                         <td>@s.Name @if (s.IsSource && s.IsTarget) { <span class="badge bg-light text-dark border ms-1">source + target</span> }
                             <div class="small text-muted">@s.Description</div></td>
-                        <td class="mono">@s.ServerAddress</td>
-                        <td class="small">@(n == 0 ? "–" : $"{n} job(s)")</td>
+                        <td class="mono sdc-nowrap">@s.ServerAddress</td>
+                        <td class="small sdc-nowrap">@(n == 0 ? "–" : $"{n} job(s)")</td>
                         <td class="small">Encrypt=@s.EncryptMode @(s.TrustServerCertificate ? "· TrustCert" : "") @(s.ReadOnlyIntent ? "· ReadOnly" : "") @(s.MultiSubnetFailover ? "· MSF" : "")</td>
                         <td>@(s.IsActive ? "Active" : "Inactive")</td>
                         <td class="small" style="max-width:380px">
@@ -213,7 +213,7 @@
                     </tr>
                 }
             </tbody>
-        </table>;
+        </table></div>;
 
     private static int StatusOrder(string status) => status switch
     {

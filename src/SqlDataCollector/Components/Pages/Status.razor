@@ -69,7 +69,7 @@
 </div>
 
 <div class="section-title mb-2 mt-4">Jobs – last run</div>
-<table class="table table-sm table-hover bg-white">
+<div class="sdc-table-scroll"><table class="table table-sm table-hover bg-white">
     <thead class="table-light">
         <tr><th>Type</th><th>Job</th><th>Schedule</th><th>Last status</th><th>Started</th><th>Duration</th><th class="text-end">Rows</th><th>Error</th></tr>
     </thead>
@@ -81,14 +81,14 @@
                 <td><a href="@(r.JobKind == "Extract" ? $"/extract/{r.JobId}" : $"/export/{r.JobId}")">@r.Name</a> @if (!r.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
                 <td><ScheduleCell Kind="@r.JobKind" JobId="r.JobId" Cron="@r.CronExpression" Dependencies="deps" /></td>
                 <td><StatusBadge Status="@r.LastStatus" /></td>
-                <td>@Ui.Local(r.StartedAtUtc)</td>
-                <td>@(r.StartedAtUtc is null ? "" : Ui.Duration(r.StartedAtUtc.Value, r.FinishedAtUtc))</td>
+                <td class="sdc-nowrap">@Ui.Local(r.StartedAtUtc)</td>
+                <td class="sdc-nowrap">@(r.StartedAtUtc is null ? "" : Ui.Duration(r.StartedAtUtc.Value, r.FinishedAtUtc))</td>
                 <td class="text-end">@r.Rows?.ToString("N0")</td>
-                <td class="small text-danger">@Ui.ShortError(r.ErrorMessage)</td>
+                <td class="small text-danger"><span class="sdc-clip" style="--sdc-clip-w: 11rem" title="@r.ErrorMessage">@Ui.ShortError(r.ErrorMessage)</span></td>
             </tr>
         }
     </tbody>
-</table>
+</table></div>
 
 @code {
     private IReadOnlyList<JobStatusRow> rows = [];

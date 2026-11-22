@@ -239,7 +239,7 @@
                 <div class="col-md-4">
                     @if (job.LoadMode is LoadMode.Incremental or LoadMode.Merge)
                     {
-                        <label class="form-label small">@(job.LoadMode == LoadMode.Merge ? "Watermark column (optional – empty = read everything)" : "Watermark column")</label>
+                        <label class="form-label small sdc-nowrap">@(job.LoadMode == LoadMode.Merge ? "Watermark column (optional)" : "Watermark column")</label>
                         @if (WatermarkCandidates.Count > 0)
                         {
                             <select class="form-select form-select-sm mono" @bind="job.WatermarkColumn">
@@ -266,7 +266,7 @@
                     }
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label small">Retention (days) <HelpLink Topic="retention" Title="Retention" /></label>
+                    <label class="form-label small sdc-nowrap">Retention (days) <HelpLink Topic="retention" Title="Retention" /></label>
                     @if (job.LoadMode.KeepsCurrentStateOnly())
                     {
                         <input class="form-control form-control-sm" value="not applicable" disabled />
@@ -363,7 +363,7 @@
     </div>
 </div>
 
-<div class="d-flex gap-2 mt-3 align-items-center">
+<div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
     <button class="btn btn-primary" @onclick="() => SaveAsync(false)">Save</button>
     <button class="btn btn-outline-primary" @onclick="() => SaveAsync(true)">Save and run now</button>
     @if (!IsNew)

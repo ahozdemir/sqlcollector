@@ -76,6 +76,8 @@ a { text-decoration: none; }
     /* wide tables scroll inside their panel instead of the whole page */
     .sdc-content .table { display: block; overflow-x: auto; white-space: nowrap; }
     .sdc-content .table > thead, .sdc-content .table > tbody { width: 100%; }
+    /* title rows and button rows move to the next line instead of squeezing their buttons */
+    .sdc-content > .d-flex, .card-body > .d-flex { flex-wrap: wrap; row-gap: .5rem; }
 }
 
 /* ---------------------------------------------------------------- page header (first title row of every page) */
@@ -107,8 +109,23 @@ a { text-decoration: none; }
 .table > tbody > tr:last-child > td { border-bottom: 0; }
 .table td a { font-weight: 500; }
 
+/* short values never break inside (dates, cron expressions, names, accounts): a break at "-", "\" or a space makes
+   rows two or three lines high and the columns look shifted */
+.sdc-nowrap { white-space: nowrap; }
+/* long values (paths, details, JSON) are cut with "…" and shown in full on hover (title). A table cell ignores
+   max-width, so the limit sits on an inner block element */
+.sdc-clip { display: block; max-width: var(--sdc-clip-w, 28rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* secondary line under a cell value (e.g. the object under "server / database") */
+.sdc-sub { display: block; font-size: .75rem; color: var(--sdc-muted); white-space: nowrap; }
+/* wide tables scroll inside their own frame instead of widening the whole page */
+.sdc-table-scroll { overflow-x: auto; margin-bottom: 1rem; border-radius: var(--sdc-radius); }
+.sdc-table-scroll > .table { margin-bottom: 0; }
+
+/* form labels stay on one line (a wrapped label pushes its control below the neighbours'); hints go below the control */
+.sdc-label-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+
 /* ---------------------------------------------------------------- controls */
-.btn { border-radius: .35rem; font-weight: 500; }
+.btn { border-radius: .35rem; font-weight: 500; white-space: nowrap; }   /* "Save and run now" on two lines looks broken */
 .btn-sm { padding: .3rem .7rem; }
 .form-control, .form-select { border-color: var(--sdc-border-strong); border-radius: .35rem; }
 .form-control:focus, .form-select:focus { border-color: #86b7fe; box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .15); }
