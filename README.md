@@ -82,7 +82,11 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - **Target storage** per job: *Rowstore* (clustered index + two nonclustered indexes, default) or *Columnstore* (one
   clustered columnstore index; bulk loads go straight into compressed rowgroups). Measured on 450,000 rows: rowstore with
   PAGE compression 18.4 s, columnstore 4.3 s – and much smaller tables. Works with every load mode and daily partitions;
-  no xml/sql_variant columns; applies when the table is created (existing tables keep their layout)
+  no xml/sql_variant columns; applies when the table is created (existing tables keep their layout).
+  New jobs get a **storage suggestion** that is applied until the user picks one: estimated target rows (Append: source
+  rows × loads per day × days kept; other modes: source rows) plus 25 % growth headroom, Columnstore from 1 million rows
+  (Merge from 10 million: updates are about 2× slower in a columnstore); per table when several tables are selected.
+  Measured on 1.8 M rows: reports as fast, exports up to 2× faster, lookups without index faster, 8× smaller than PAGE
 - Technical columns on every target table: `_LoadId`, `_LoadedAt`, `_ExtractJobId`, `_SourceServer`
 - Failed loads are rolled back; loads interrupted by a crash are cleaned up by the next sync
 - decimal(38,x) values are transferred exactly (`SqlDecimal`)

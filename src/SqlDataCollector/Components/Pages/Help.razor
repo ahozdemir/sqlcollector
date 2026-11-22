@@ -159,6 +159,13 @@
                     added on top of the columnstore) and daily partitioning (retention still truncates whole days).</li>
                 <li><b>Limits:</b> <code>xml</code> and <code>sql_variant</code> columns are not allowed (the load fails with the column names) – choose Rowstore or convert them in a
                     query, e.g. <code>CAST(Doc AS nvarchar(max)) AS Doc</code>. Needs SQL Server 2016 SP1 or later on the target.</li>
+                <li><b>Suggestion:</b> for a new job the form suggests the storage and applies it until you pick one yourself. It estimates the rows the target will hold –
+                    Append: source rows × loads per day (from the schedule) × days kept (one year when nothing is deleted); Replace, Merge, Incremental: about the source rows –
+                    adds 25 % growth headroom and suggests Columnstore from 1 million rows. Example: 50,000 rows loaded every night and kept 30 days = 1.5 million rows → Columnstore.
+                    <b>Merge</b> gets Columnstore only from 10 million rows: it updates changed rows, and an update in a columnstore is a delete plus an insert
+                    (measured about 2× slower than PAGE rowstore); reads and exports are as fast or faster, inserts faster.
+                    Views, queries and tables with xml / sql_variant columns get Rowstore. The reason is shown under the field; when you chose differently, <i>Use …</i> takes the suggestion.
+                    With several tables selected every table gets its own suggestion (column <i>Storage</i> of the list).</li>
                 <li>The setting applies <b>when the table is created</b>. An existing table keeps its layout; to convert one, use Replace with rebuild once or ask the DBA.</li>
                 <li>Small frequent loads (e.g. a few hundred rows every 15 minutes) first land in an uncompressed delta store; SQL Server compresses it in the background.</li>
             </ul>

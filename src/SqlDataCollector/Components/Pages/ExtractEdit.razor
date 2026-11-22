@@ -175,7 +175,7 @@
                     <div class="col-12">
                         <label class="form-label small">Target tables – one job per selected table (@SelectedTables.Count())</label>
                         <table class="table table-sm mb-0 bg-white">
-                            <thead><tr><th>Source table</th><th></th><th>Target table in <span class="mono text-lowercase">@job.TargetSchema</span></th><th>State</th></tr></thead>
+                            <thead><tr><th>Source table</th><th></th><th>Target table in <span class="mono text-lowercase">@job.TargetSchema</span></th><th>State</th><th>Storage</th></tr></thead>
                             <tbody>
                                 @foreach (var t in SelectedTables)
                                 {
@@ -190,6 +190,11 @@
                                             @if (duplicate) { <span class="sdc-status err">same name twice</span> }
                                             else if (exists) { <span class="sdc-status warn">exists – @(job.SchemaPolicy == SchemaPolicy.Strict ? "must match" : "evolved")</span> }
                                             else { <span class="sdc-status neutral">new table</span> }
+                                        </td>
+                                        <td class="small sdc-nowrap" title="@AdviceFor(t).Reason">
+                                            @if (exists) { <span class="text-muted">kept</span> }
+                                            else if (storageTouched) { @job.TargetStorage }
+                                            else { @AdviceFor(t).Storage <span class="text-muted">(suggested@(t.Rows is { } r ? $", {StorageAdvisor.Format(r)} rows" : ""))</span> }
                                         </td>
                                     </tr>
                                 }
@@ -219,14 +224,30 @@
                 </div>
                 <div class="col-12">
                     <label class="form-label small">Storage (when the table is created) <HelpLink Topic="storage" Title="Target storage: rowstore or columnstore" /></label>
-                    <select class="form-select form-select-sm" @bind="job.TargetStorage">
-                        <option value="@TargetStorage.Rowstore">Rowstore – classic indexed table (default)</option>
+                    <select class="form-select form-select-sm" value="@EffectiveStorage" @onchange="StorageChosen" aria-label="Storage">
+                        <option value="@TargetStorage.Rowstore">Rowstore – classic indexed table</option>
                         <option value="@TargetStorage.Columnstore">Columnstore – large tables: about 4× faster loads, much smaller, fast scans</option>
                     </select>
-                    @if (job.TargetStorage == TargetStorage.Columnstore)
+                    @if (MultiTable)
                     {
-                        <div class="form-text">Best for large tables that are read in bulk (reports, exports). xml and sql_variant columns are not allowed.
-                            An existing target table keeps its storage; only a new (or rebuilt) table is created as columnstore.</div>
+                        <div class="form-text">@(storageTouched
+                            ? $"{job.TargetStorage} for every selected table (your choice)."
+                            : "Suggested per table from its size, load mode, schedule and retention (see the list above); tables with xml / sql_variant columns stay rowstore.")</div>
+                    }
+                    else if (Advice is { } advice)
+                    {
+                        <div class="form-text @(advice.Storage == EffectiveStorage ? "" : "text-warning-emphasis")">
+                            <b>@(advice.Storage != EffectiveStorage ? "Suggestion differs:" : IsNew && !storageTouched ? "Suggested and applied:" : "Suggested:")</b> @advice.Reason
+                            @if (advice.Storage != EffectiveStorage && canEdit) { <a href="" class="ms-1" @onclick:preventDefault @onclick="UseSuggestion">Use @advice.Storage</a> }
+                        </div>
+                    }
+                    @if (!MultiTable && TargetExists)
+                    {
+                        <div class="form-text">The target table already exists and keeps its current storage; the setting applies when a table is created or rebuilt.</div>
+                    }
+                    else if (EffectiveStorage == TargetStorage.Columnstore)
+                    {
+                        <div class="form-text">Best for large tables that are read in bulk (reports, exports). xml and sql_variant columns are not allowed.</div>
                     }
                 </div>
             </div>
@@ -396,6 +417,44 @@
 
     private ExtractJobDef job = new();
     private bool IsNew => Id is null;
+
+    // ---------------- target storage suggestion ----------------
+    private bool storageTouched;   // the user picked the storage: the suggestion is only shown, no longer applied
+    private double RunsPerDay => StorageAdvisor.RunsPerDay(job.TriggerMode, job.CronExpression, job.TimeZoneId);
+    private int? PlannedRetention => job.LoadMode.KeepsCurrentStateOnly() ? null : policy?.EffectiveDays(job.RetentionDays, job.LoadMode) ?? job.RetentionDays;
+    private bool TargetExists => existingTargetTables.Contains($"{job.TargetSchema}.{job.TargetTable}");
+    private IEnumerable<ColumnInfo> SelectedColumnInfos => job.SourceType == SourceType.Table
+        ? columns.Where(c => advancedColumns || selectedColumns.Count == 0 || selectedColumns.Contains(c.Name))
+        : preview?.Schema ?? [];
+    private IReadOnlyList<string> UnsupportedForColumnstore => StorageAdvisor.UnsupportedColumns(SelectedColumnInfos.Select(c => (c.Name, c.TypeDeclaration)));
+
+    /// <summary>Suggestion for a single source (a table or a query); null while nothing is selected or several tables are.</summary>
+    private StorageAdvice? Advice
+    {
+        get
+        {
+            if (MultiTable || (job.SourceType == SourceType.Table && selectedTables.Count == 0)) return null;
+            long? rows = job.SourceType == SourceType.Table ? tables.FirstOrDefault(t => selectedTables.Contains(t.Key))?.Rows : null;
+            return StorageAdvisor.Suggest(rows, job.LoadMode, PlannedRetention, RunsPerDay, UnsupportedForColumnstore);
+        }
+    }
+
+    private StorageAdvice AdviceFor(TableInfo t) => StorageAdvisor.Suggest(t.Rows, job.LoadMode, PlannedRetention, RunsPerDay);
+
+    /// <summary>New jobs follow the suggestion until the user picks a storage.</summary>
+    private TargetStorage EffectiveStorage => IsNew && !storageTouched && Advice is { } a ? a.Storage : job.TargetStorage;
+
+    private void StorageChosen(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<TargetStorage>(e.Value?.ToString(), out var s)) job.TargetStorage = s;
+        storageTouched = true;
+    }
+
+    private void UseSuggestion()
+    {
+        if (Advice is { } a) job.TargetStorage = a.Storage;
+        storageTouched = true;
+    }
     private bool schemaTouched;
     private RetentionPolicy? policy;
     private bool isAdmin;
@@ -509,6 +568,7 @@
                 await LoadSourceDbsAsync(keepSelection: true);
                 await SnapshotChangedAsync();
                 await LoadTargetDbsAsync(keepSelection: true);
+                await TargetDbChanged();   // schemas and existing tables of the target (the storage note says whether the table exists)
                 if (job.SourceType == SourceType.Table && job.SourceTable is not null)
                 {
                     selectedTables.Add($"{job.SourceSchema ?? "dbo"}.{job.SourceTable}");
@@ -710,12 +770,29 @@
 
             if (MultiTable)
             {
+                // storage per table: the suggestion from its size, or the user's choice for all; a columnstore cannot hold xml / sql_variant
+                var storages = new Dictionary<string, TargetStorage>(StringComparer.OrdinalIgnoreCase);
+                foreach (var t in SelectedTables)
+                {
+                    var storage = storageTouched ? job.TargetStorage : AdviceFor(t).Storage;
+                    if (storage == TargetStorage.Columnstore)
+                    {
+                        var bad = StorageAdvisor.UnsupportedColumns((await Catalog.ColumnsAsync(job.SourceServerId, job.SourceDatabase, t.Schema, t.Name))
+                            .Select(c => (c.Name, c.TypeDeclaration)));
+                        if (bad.Count > 0 && storageTouched)
+                            throw new InvalidOperationException($"{t.Key}: a columnstore cannot hold the xml / sql_variant column(s) {string.Join(", ", bad)}. Choose Rowstore.");
+                        if (bad.Count > 0) storage = TargetStorage.Rowstore;
+                    }
+                    storages[t.Key] = storage;
+                }
+
                 var created = new List<string>();
                 foreach (var t in SelectedTables)
                 {
                     var j = Clone(job);
                     j.ExtractJobId = 0; j.SourceSchema = t.Schema; j.SourceTable = t.Name; j.ColumnList = null;
                     j.TargetTable = TargetFor(t);
+                    j.TargetStorage = storages[t.Key];
                     j.Name = string.IsNullOrWhiteSpace(job.Name) ? $"{job.SourceDatabase}_{t.Schema}_{t.Name}" : $"{job.Name.Trim()}_{j.TargetTable}";
                     await EnsureRebuildTargetIsFreeAsync(j);
                     await Repo.SaveExtractJobAsync(j, user);
@@ -724,11 +801,16 @@
                     if (runNow) Registrar.RunExtractNow(j, user);
                     created.Add(j.Name);
                 }
-                info = $"{created.Count} job(s) created and scheduled: {string.Join(", ", created)}";
+                var columnstores = storages.Values.Count(v => v == TargetStorage.Columnstore);
+                info = $"{created.Count} job(s) created and scheduled{(columnstores > 0 ? $" ({columnstores} with columnstore storage)" : "")}: {string.Join(", ", created)}";
                 Nav.NavigateTo("/extract");
                 return;
             }
 
+            // a new job takes the suggestion unless the user picked a storage; a columnstore cannot hold xml / sql_variant (checked before any table exists)
+            if (IsNew && !storageTouched && Advice is { } advice) job.TargetStorage = advice.Storage;
+            if (job.TargetStorage == TargetStorage.Columnstore && !TargetExists && UnsupportedForColumnstore is { Count: > 0 } unsupported)
+                throw new InvalidOperationException($"A columnstore cannot hold the xml / sql_variant column(s) {string.Join(", ", unsupported)}. Choose Rowstore or leave the column out.");
             await EnsureRebuildTargetIsFreeAsync(job);
             var id = await Repo.SaveExtractJobAsync(job, user);
             await Dependencies.SaveAsync(new JobRef(JobRef.Extract, id), job.TriggerMode, upstreams, user);

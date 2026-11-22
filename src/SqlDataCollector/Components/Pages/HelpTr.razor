@@ -163,6 +163,13 @@
         <li>Bütün yükleme modlarında ve günlük bölümlemede çalışır; saklama süresi yine eski günleri bölüm bölüm siler.</li>
         <li><code>xml</code> ve <code>sql_variant</code> kolonları columnstore'da tutulamaz; yükleme bu kolonların adlarıyla hata verir. Rowstore seçin ya da sorguda dönüştürün
             (<code>CAST(Doc AS nvarchar(max)) AS Doc</code>). Hedefte SQL Server 2016 SP1 veya üstü gerekir.</li>
+        <li><b>Öneri:</b> yeni job'da form uygun yapıyı önerir ve siz başka bir şey seçene kadar uygular. Hedef tablonun ulaşacağı satır sayısını tahmin eder:
+            Append'de kaynak satır × günlük yükleme sayısı (zamanlamadan) × saklanan gün (hiç silinmiyorsa bir yıl); Replace, Merge ve Incremental'da yaklaşık kaynak kadar.
+            Üstüne %25 büyüme payı ekler ve 1 milyon satırdan itibaren Columnstore önerir. Örnek: her gece 50.000 satır, 30 gün saklama = 1,5 milyon satır → Columnstore.
+            <b>Merge</b> için Columnstore ancak 10 milyon satırdan itibaren önerilir: Merge değişen satırları günceller, columnstore'da güncelleme sil + ekle demektir
+            (ölçümde PAGE rowstore'dan yaklaşık 2 kat yavaş). Okuma ve export aynı hızda ya da daha hızlıdır, ekleme daha hızlıdır.
+            View, sorgu ve xml / sql_variant kolonlu tablolar için Rowstore önerilir. Gerekçe alanın altında yazar; farklı seçtiyseniz <i>Use …</i> öneriyi uygular.
+            Birden fazla tablo seçildiğinde her tablo kendi önerisini alır (listedeki <i>Storage</i> sütunu).</li>
         <li>Seçenek <b>tablo oluşturulurken</b> geçerlidir; mevcut bir tablo olduğu gibi kalır. Dönüştürmek için bir kez "Replace + rebuild" ile yükleyin ya da DBA'den isteyin.</li>
     </ul>
 </section>
