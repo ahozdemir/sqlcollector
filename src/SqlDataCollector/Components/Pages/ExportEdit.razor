@@ -303,6 +303,21 @@
         }
     }
 
+    private bool parametersSeen;
+    private int? shownId;   // the job this form was loaded for (null = new job)
+
+    /// <summary>
+    /// The router reuses this component when only the id changes (/export/1 → /export/2, browser back/forward), but the form
+    /// is loaded once: reload the page so nothing of the previous job remains. Saving a new job (new → its id) keeps the form.
+    /// </summary>
+    protected override void OnParametersSet()
+    {
+        if (!parametersSeen) { parametersSeen = true; shownId = Id; return; }
+        if (Id == shownId) return;
+        if (shownId is null && Id is not null && Id == job.ExportJobId) { shownId = Id; return; }
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+    }
+
     protected override async Task OnInitializedAsync()
     {
         try
