@@ -1,0 +1,23 @@
+<Project>
+  <!--
+    Version of local builds = the latest release tag (v1.7.1 -> 1.7.1), so the UI, the logs and the setup show the real
+    version instead of the SDK default 1.0.0. An explicit version always wins: the release workflow passes -p:Version=<tag>
+    (a property set inside a target would override even that, hence the check here, evaluated before any project file).
+    Without git (e.g. a container build without .git) the default stays.
+  -->
+  <PropertyGroup>
+    <SdcVersionGiven Condition="'$(Version)' != ''">true</SdcVersionGiven>
+  </PropertyGroup>
+
+  <Target Name="SdcVersionFromGitTag" BeforeTargets="GetAssemblyVersion"
+          Condition="'$(SdcVersionGiven)' != 'true' and '$(SdcSkipGitVersion)' != 'true'">
+    <Exec Command="git describe --tags --abbrev=0 --match &quot;v[0-9]*&quot;" WorkingDirectory="$(MSBuildThisFileDirectory)"
+          ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_SdcGitTag" />
+      <Output TaskParameter="ExitCode" PropertyName="_SdcGitExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_SdcGitExitCode)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_SdcGitTag)', '^v\d+\.\d+\.\d+$'))">
+      <Version>$(_SdcGitTag.Substring(1))</Version>
+    </PropertyGroup>
+  </Target>
+</Project>
