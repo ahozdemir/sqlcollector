@@ -11,8 +11,10 @@
         <li><b>Yönetici şifresini belirleyin.</b> Sunucunun kendisinde tarayıcıyla <code>https://localhost</code> adresini açın, <b>Local administrator</b>'a tıklayın ve yeni bir şifre belirleyin.
             <GuideFigure Src="guide/login.png" Caption="Giriş ekranı: kurumsal kullanıcılar Windows (AD) ile, ilk kurulumda yerel yönetici ile girer." />
         </li>
-        <li><b>Google Cloud anahtarını yükleyin.</b> <b>Settings → Google Cloud Storage credential</b> bölümünde servis hesabının JSON anahtarını seçip <b>Save key</b>'e basın,
-            ardından bucket adını yazıp <b>Test connection</b> ile deneyin.
+        <li><b>Dosyaların nereye gideceğini tanımlayın.</b> <b>Administration → Destinations</b> sayfasında <b>+ New destination</b>'a basın, sağlayıcıyı seçin –
+            <b>Google Cloud Storage</b>, <b>Amazon S3 / S3-compatible</b> (MinIO, Wasabi, Ceph …) veya <b>Azure Blob Storage</b> – bucket veya container adını ve anahtarı girip <b>Test</b>'e basın.
+            <GuideFigure Src="guide/destinations.png" Caption="Destinations: her bucket veya container bir satır; Test, kayıtlı anahtarla küçük bir deneme dosyası yazar." />
+            GCS için anahtarı bir kez <b>Settings → Google Cloud Storage credential</b> bölümüne yükleyip bütün GCS destination'larında kullanabilirsiniz.
             <GuideFigure Src="guide/settings-gcs.png" Caption="Settings sayfasında GCS anahtarı: anahtar şifrelenerek saklanır, ekranda yalnızca servis hesabının adı görünür." />
         </li>
         <li><b>Kurumsal HTTPS sertifikasını yükleyin</b> (<b>Settings → HTTPS certificate</b>). Kurulumdaki geçici sertifika için tarayıcılar uyarı verir.</li>
@@ -23,7 +25,7 @@
     <div class="alert alert-info"><b>Öneri.</b> Kişileri tek tek eklemek yerine AD gruplarına rol verin (örn. <i>DWH-Editors</i>). İnsanlar gruba girip çıktıkça yetkileri kendiliğinden değişir.</div>
     <div class="alert alert-warning"><b>Dikkat.</b> Yerel yönetici hesabı yalnızca ilk kurulum ve acil durumlar içindir; şifresini güvenli bir yerde saklayın. Günlük kullanımda herkes Windows hesabıyla girmelidir.</div>
     <p><b>Nasıl kontrol ederim?</b> <b>Status</b> sayfasında "Workers online" en az 1 olmalı ve izin kontrolünde kırmızı (<i>Missing</i>) satır kalmamalıdır.</p>
-    <p class="small">Başvuru: <a href="/help#installation">Kurulum</a> · <a href="/help#https">HTTPS sertifikası</a> · <a href="/help#gcs">GCS ayarları</a> · <a href="/help#servers">Sunucular ve servis hesapları</a> · <a href="/help#permission-check">İzin kontrolü</a></p>
+    <p class="small">Başvuru: <a href="/help#installation">Kurulum</a> · <a href="/help#https">HTTPS sertifikası</a> · <a href="/help#destinations">Export hedefleri</a> · <a href="/help#servers">Sunucular ve servis hesapları</a> · <a href="/help#permission-check">İzin kontrolü</a></p>
 </section>
 
 <section id="nightly-table">
@@ -62,7 +64,7 @@
     <h2>Büyük ve sürekli değişen tablolar</h2>
     <p class="guide-meta">Kim: Editor · Örnek: milyonlarca satırlık sipariş veya müşteri tablosu</p>
     <p><b>Neden?</b> Büyük bir tabloyu her gece baştan okumak hem kaynağı yorar hem de dosya boyutlarını büyütür. Doğru mod seçilince yalnızca değişen satırlar okunur
-       ve GCS'e yalnızca değişiklikler gider (örn. 5.000 müşteriden 25'i değiştiyse 25 satır).</p>
+       ve buluta yalnızca değişiklikler gider (örn. 5.000 müşteriden 25'i değiştiyse 25 satır).</p>
     <h3>Hangi mod?</h3>
     <table class="table table-sm table-bordered bg-white">
         <thead class="table-light"><tr><th>İhtiyaç</th><th>Mod</th></tr></thead>
@@ -89,14 +91,15 @@
 </section>
 
 <section id="nightly-export">
-    <h2>Toplanan veriyi her gece GCS'e göndermek</h2>
+    <h2>Toplanan veriyi her gece buluta göndermek</h2>
     <p class="guide-meta">Kim: Editor · Süre: 5 dakika</p>
     <p><b>Neden?</b> Buluttaki analiz ekipleri (BigQuery, Databricks) verinin her gün düzenli ve eksiksiz gelmesini bekler. Tek bir "All collected tables" export'u
        DWH'deki bütün toplanan tabloları kapsar ve yeni tabloları kendiliğinden ekler.</p>
     <h3>Adımlar</h3>
     <ol>
-        <li><b>GCS Exports → + New export</b>. Sunucu olarak DWH sunucusunu, veritabanı olarak DWH'yi, mod olarak <b>All collected tables</b>'ı seçin.</li>
-        <li><b>Bucket</b> adını yazın. Dosya adı şablonunu olduğu gibi bırakabilirsiniz: dosyalar tablo ve gün klasörlerine ayrılır.</li>
+        <li><b>Exports → + New export</b>. Sunucu olarak DWH sunucusunu, veritabanı olarak DWH'yi, mod olarak <b>All collected tables</b>'ı seçin.</li>
+        <li><b>2 · Destination</b> bölümünden dosyaların gideceği yeri seçin (GCS, S3 veya Azure). Liste boşsa önce bir Admin'in <b>Destinations</b> sayfasından eklemesi gerekir.
+            Dosya adı şablonunu olduğu gibi bırakabilirsiniz: dosyalar tablo ve gün klasörlerine ayrılır.</li>
         <li><b>Dosya formatını seçin:</b> Excel veya genel kullanım için <b>CSV</b>; BigQuery, Spark, pandas için <b>Parquet</b> (yaklaşık 7 kat küçük, tipler korunur).
             <GuideFigure Src="guide/export-format.png" Caption="3 · File format: CSV ayarları (ayraç, tırnak, NULL) veya Parquet sıkıştırması." />
         </li>
@@ -106,10 +109,10 @@
         </li>
         <li><b>Save</b>. İlk denemeyi job sayfasındaki <b>Run now</b> ile yapabilirsiniz.</li>
     </ol>
-    <div class="alert alert-info"><b>Öneri.</b> GCS'te eski dosyaların temizliği için bucket'a bir <i>lifecycle</i> kuralı (örn. 90 gün) tanımlayın; SqlHarbor buluttaki dosyaları silmez.</div>
+    <div class="alert alert-info"><b>Öneri.</b> Buluttaki eski dosyaların temizliği için bucket'a veya container'a bir <i>lifecycle</i> kuralı (örn. 90 gün) tanımlayın; SqlHarbor buluttaki dosyaları silmez.</div>
     <div class="alert alert-warning"><b>Dikkat.</b> Göndermeden önce <a href="/guide#personal-data">kişisel veri</a> senaryosuna bakın. "All collected tables" yeni eklenen her tabloyu da otomatik gönderir.</div>
-    <p><b>Nasıl kontrol ederim?</b> <b>Run history</b>'de export satırında tablo, satır ve dosya sayıları ile dosyaların GCS adresleri görünür.</p>
-    <p class="small">Başvuru: <a href="/help#export-modes">Export modları</a> · <a href="/help#csv-format">CSV ve Parquet</a> · <a href="/help#gcs">GCS ayarları ve dosya adları</a> · <a href="/help#dependencies">Job bağımlılıkları</a></p>
+    <p><b>Nasıl kontrol ederim?</b> <b>Run history</b>'de export satırında tablo, satır ve dosya sayıları ile dosyaların adresleri (<code>gs://</code>, <code>s3://</code> veya <code>https://…blob.core.windows.net</code>) görünür.</p>
+    <p class="small">Başvuru: <a href="/help#export-modes">Export modları</a> · <a href="/help#csv-format">CSV ve Parquet</a> · <a href="/help#destinations">Export hedefleri</a> · <a href="/help#gcs">Dosya adları</a> · <a href="/help#dependencies">Job bağımlılıkları</a></p>
 </section>
 
 <section id="personal-data">

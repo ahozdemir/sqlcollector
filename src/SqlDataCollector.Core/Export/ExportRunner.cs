@@ -71,7 +71,7 @@ public static class ObjectNameTemplate
 public sealed class ExportRunner(
     MetadataRepository repo,
     SqlConnectionFactory factory,
-    GcsUploader uploader,
+    Storage.ObjectStoreFactory stores,
     Privacy.MaskingService masking,
     DependencyService dependencies,
     IOptions<CollectorOptions> options,
@@ -85,6 +85,9 @@ public sealed class ExportRunner(
     }
 
     private sealed class PartialExportException(string message) : Exception(message);
+
+    private Storage.IObjectStore? _store;
+    private Storage.IObjectStore Store => _store ?? throw new InvalidOperationException("The export destination is not open.");
 
     [JobDisplayName("Export #{0}: {1}")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = [300, 900, 1800], OnAttemptsExceeded = AttemptsExceededAction.Fail)]
@@ -118,6 +121,9 @@ public sealed class ExportRunner(
 
         try
         {
+            // the job's destination (GCS, S3, Azure Blob); a missing or inactive destination fails the run
+            _store = await stores.ForExportAsync(job);
+
             // Incremental/AllTables: always read from the primary so a lagging readable secondary cannot skip rows
             bool primary = job.ExportMode is ExportMode.Incremental or ExportMode.AllTables;
             // Every export read (free SQL, column lists, AllTables) runs as the read-only Collector:ExportReadAsUser
@@ -166,7 +172,7 @@ public sealed class ExportRunner(
                 }, ObjectNameTemplate.CommonPrefix(job.ObjectNameTemplate, job.Name, job.SourceDatabase, local), ct);
 
             await repo.CompleteExportRunAsync(runId, exportJobId, "Succeeded", data.Rows, data.Parts.Count, data.Bytes, lo, hi,
-                string.Join(Environment.NewLine, data.Parts.Select(p => $"gs://{job.Bucket}/{p.ObjectName}")),
+                string.Join(Environment.NewLine, data.Parts.Select(p => Store.Describe(p.ObjectName))),
                 job.ExportMode == ExportMode.Incremental ? hi : null,
                 error: data.PrivacyWarnings.Count > 0 ? string.Join(Environment.NewLine, data.PrivacyWarnings) : null);
 
@@ -185,6 +191,8 @@ public sealed class ExportRunner(
         }
         finally
         {
+            _store?.Dispose();
+            _store = null;
             if (!options.Value.KeepLocalFiles)
             {
                 try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
@@ -242,7 +250,7 @@ public sealed class ExportRunner(
                 ok++;
                 totalRows += data.Rows; totalBytes += data.Bytes; totalFiles += data.Parts.Count;
                 privacyWarnings.AddRange(data.PrivacyWarnings);
-                objectNames.AddRange(data.Parts.Select(p => $"gs://{job.Bucket}/{p.ObjectName}"));
+                objectNames.AddRange(data.Parts.Select(p => Store.Describe(p.ObjectName)));
                 summary.Add(new
                 {
                     table = t.Key, status = "Succeeded", rows = data.Rows, loadIdFrom = lo, loadIdTo = hi, columns = data.Columns,
@@ -374,7 +382,7 @@ public sealed class ExportRunner(
             var name = ObjectNameTemplate.Render(job.ObjectNameTemplate, job.Name, job.SourceDatabase, schema, table, local, part.Number.ToString("0000"));
             part.ObjectName = ObjectNameTemplate.WithExtension(name, job);
             var contentType = parquet ? "application/vnd.apache.parquet" : job.Gzip ? "application/gzip" : "text/csv; charset=utf-8";
-            await uploader.UploadFileAsync(job.Bucket, part.ObjectName, part.LocalPath, contentType, ct);
+            await Store.UploadFileAsync(part.ObjectName, part.LocalPath, contentType, ct);
         }
         var uploadSec = swUpload.Elapsed.TotalSeconds;
 
@@ -418,7 +426,7 @@ public sealed class ExportRunner(
             database = job.SourceDatabase, exportedAtUtc = nowUtc, runDateLocal = local.ToString("yyyy-MM-dd", inv),
             uploadedGzip = job.Gzip, delimiter = job.Delimiter, content = body
         };
-        await uploader.UploadTextAsync(job.Bucket, name,
+        await Store.UploadTextAsync(name,
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }), "application/json", ct);
     }
 

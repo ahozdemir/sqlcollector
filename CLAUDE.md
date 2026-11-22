@@ -20,7 +20,8 @@ Guidance for Claude Code in this repository. Read it fully before changing code.
 ## What the product does
 
 Collects data on a schedule from several SQL Server **sources** into tables on one **target** SQL Server, keeps it for
-a retention period, and every night exports what was collected as **plain CSV files to Google Cloud Storage**
+a retention period, and every night exports what was collected as **CSV or Parquet files to object storage** – Google
+Cloud Storage, Amazon S3 / S3-compatible (MinIO, Wasabi, Ceph) or Azure Blob Storage, chosen per export job (*Destinations*)
 (local archive on the export worker is `.csv.gz`). Hangfire schedules and executes; Blazor Server UI (English) with
 AD (Negotiate) sign-in plus one local admin; roles Admin/Editor/Viewer with server/database permissions.
 
@@ -29,7 +30,8 @@ AD (Negotiate) sign-in plus one local admin; roles Admin/Editor/Viewer with serv
 ```
 src/SqlDataCollector.Core/   job/domain library, NO ASP.NET dependency (also loaded by an organization's existing Hangfire host)
   Extract/                   ExtractRunner, TargetTableManager (Strict/Evolve, daily partitions), Watermark, AugmentedDataReader
-  Export/                    ExportRunner (single table / custom query / AllTables), CsvPartWriter, GcsUploader
+  Export/                    ExportRunner (single table / custom query / AllTables), CsvPartWriter, ParquetPartWriter, GcsUploader
+  Storage/                   IObjectStore: GCS, S3 (+ compatible), Azure Blob; ObjectStoreFactory (destinations, Test)
   Scheduling/SystemJobs.cs   RetentionRunner, JobSynchronizer, StartupService
   Infrastructure/            SqlConnectionFactory, MetadataRepository (Dapper), AppLock, CollectorQueues, SchemaInstaller
   Services/                  CatalogService (db/table/column lists, preview, target compare), JobRegistrar (Hangfire registration)
@@ -63,7 +65,9 @@ overloads or clearing recurring jobs.
 - Locally installed SQL Server = metadata DB `SdcMeta` (+ embedded Hangfire) and target DB `SdcDwh`, Windows auth.
 - Docker: `src-erp` (localhost,14331, DB `ERP`: 5k customers, 200k orders, 450k lines, procs `usp_DailySales`,
   `usp_SimulateActivity`), `src-crm` (localhost,14332, DB `CRM`: 20k contacts, 100k activities, view, proc),
-  `fakegcs` GCS emulator (http://localhost:4443, bucket `test-bucket`). SA password `Dev_Passw0rd!2026` (dev only).
+  `fakegcs` GCS emulator (http://localhost:4443, bucket `test-bucket`), `s3mock` S3-compatible (http://localhost:9090,
+  any access key, bucket `dwh-exports`, path-style), `azurite` Azure Blob emulator (http://127.0.0.1:10000/devstoreaccount1).
+  SA password `Dev_Passw0rd!2026` (dev only).
 - App: http://localhost:5080, local admin `admin` / `Admin!Dev2026`; the Windows user running setup gets Admin.
 
 Claude Code on Windows runs commands in Git Bash – call the script like this:

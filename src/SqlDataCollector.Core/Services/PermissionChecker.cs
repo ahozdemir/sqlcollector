@@ -34,6 +34,7 @@ public sealed class PermissionChecker(
     MetadataRepository repo,
     IOptions<CollectorOptions> options,
     IOptions<Alerts.AlertOptions> alertOptions,
+    IOptions<GcsOptions> gcsOptions,
     ILogger<PermissionChecker> logger)
 {
 
@@ -65,6 +66,8 @@ public sealed class PermissionChecker(
 
         // alerts are dispatched by the Web process: its network must reach SMTP and the webhooks
         if (ctx.IsWeb) await CheckAlertDestinationsAsync(rows, ctx, ct);
+        // exports upload from the sdc_export process; the Web runs a destination's Test
+        if (ctx.IsWeb || ctx.Queue == CollectorQueues.Export) await CheckExportDestinationsAsync(rows, ctx, ct);
 
         if (!ctx.WritesTarget && !ctx.ReadsTarget && !ctx.ReadsSources) return rows;
 
@@ -223,6 +226,19 @@ public sealed class PermissionChecker(
                 rows.Add(Row(ctx, CheckCategory.Alerts, c.Name, null, null, $"Alert channel '{c.Name}' reachable", CheckStatus.Error, "Invalid URL."));
             else
                 rows.Add(await TcpRowAsync(ctx, u.Host, u.Port, $"Alert channel '{c.Name}' reachable", ct));
+        }
+    }
+
+    /// <summary>TCP reachability of every active export destination's endpoint (nothing is uploaded).</summary>
+    private async Task CheckExportDestinationsAsync(List<PermissionCheckRow> rows, CheckContext ctx, CancellationToken ct)
+    {
+        var used = (await repo.GetExportJobsAsync()).Where(e => e.IsActive && e.DestinationId is not null).Select(e => e.DestinationId!.Value).ToHashSet();
+        foreach (var d in (await repo.GetDestinationsAsync()).Where(d => d.IsActive && used.Contains(d.DestinationId)))
+        {
+            if (Storage.StorageNames.Endpoint(d, gcsOptions.Value.Endpoint) is not { } uri) continue;   // Azure connection string: endpoint inside the secret
+            var row = await TcpRowAsync(ctx, uri.Host, uri.Port, $"Export destination '{d.Name}' reachable", ct);
+            row.Category = CheckCategory.Destinations;
+            rows.Add(row);
         }
     }
 

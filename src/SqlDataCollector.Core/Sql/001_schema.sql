@@ -515,3 +515,44 @@ GO
    rows skipped or read twice while the source changes; NOLOCK is ignored). Needs ALLOW_SNAPSHOT_ISOLATION ON in the source database. */
 IF COL_LENGTH(N'etl.ExtractJob', N'ReadSnapshot') IS NULL ALTER TABLE etl.ExtractJob ADD ReadSnapshot bit NOT NULL CONSTRAINT DF_ExtractJob_ReadSnapshot DEFAULT (0);
 GO
+
+/* ---------------- Export destinations (object storage) ----------------
+   Provider : Gcs (Google Cloud Storage) | S3 (Amazon S3 and S3-compatible: MinIO, Wasabi, Ceph, ...) | AzureBlob (Blob Storage, ADLS Gen2)
+   Bucket   : bucket (GCS, S3) or container (Azure)
+   Endpoint : S3-compatible service URL / Azure account URL (https://<account>.blob.core.windows.net); empty = provider default
+   AuthMethod: Default (GCS: the credential of the Settings page; S3: AWS default chain / instance role; Azure: Managed Identity)
+               Key (GCS: JSON key; S3: access key + secret; Azure: account key) | ConnectionString | Sas (Azure)
+   Secret   : AES-GCM encrypted with Secrets:Key (never shown again). Existing GCS export jobs get one destination per bucket. */
+IF OBJECT_ID(N'etl.Destination', N'U') IS NULL
+CREATE TABLE etl.Destination (
+    DestinationId   int IDENTITY(1,1) NOT NULL CONSTRAINT PK_Destination PRIMARY KEY,
+    Name            nvarchar(100) NOT NULL CONSTRAINT UQ_Destination_Name UNIQUE,
+    Provider        varchar(20) NOT NULL CONSTRAINT CK_Destination_Provider CHECK (Provider IN ('Gcs','S3','AzureBlob')),
+    Bucket          nvarchar(255) NOT NULL,
+    Region          nvarchar(64) NULL,
+    Endpoint        nvarchar(400) NULL,
+    AuthMethod      varchar(20) NOT NULL CONSTRAINT DF_Destination_Auth DEFAULT ('Default')
+                    CONSTRAINT CK_Destination_Auth CHECK (AuthMethod IN ('Default','Key','ConnectionString','Sas')),
+    AccessKeyId     nvarchar(200) NULL,
+    Secret          nvarchar(max) NULL,
+    ForcePathStyle  bit NOT NULL CONSTRAINT DF_Destination_PathStyle DEFAULT (0),
+    IsActive        bit NOT NULL CONSTRAINT DF_Destination_Active DEFAULT (1),
+    ModifiedBy      nvarchar(256) NOT NULL,
+    ModifiedAtUtc   datetime2(3) NOT NULL CONSTRAINT DF_Destination_Modified DEFAULT (SYSUTCDATETIME())
+);
+GO
+IF COL_LENGTH(N'etl.ExportJob', N'DestinationId') IS NULL
+    ALTER TABLE etl.ExportJob ADD DestinationId int NULL CONSTRAINT FK_ExportJob_Destination REFERENCES etl.Destination(DestinationId);
+GO
+/* Upgrade: export jobs from before destinations existed keep writing to their GCS bucket */
+INSERT etl.Destination (Name, Provider, Bucket, AuthMethod, ModifiedBy)
+SELECT DISTINCT LEFT(CONCAT(N'gcs-', e.Bucket), 100), 'Gcs', e.Bucket, 'Default', N'upgrade'
+FROM etl.ExportJob e
+WHERE e.DestinationId IS NULL
+  AND NOT EXISTS (SELECT 1 FROM etl.Destination d WHERE d.Provider = 'Gcs' AND d.Bucket = e.Bucket)
+  AND NOT EXISTS (SELECT 1 FROM etl.Destination d WHERE d.Name = LEFT(CONCAT(N'gcs-', e.Bucket), 100));
+UPDATE e SET DestinationId = d.DestinationId
+FROM etl.ExportJob e
+CROSS APPLY (SELECT TOP (1) DestinationId FROM etl.Destination d WHERE d.Provider = 'Gcs' AND d.Bucket = e.Bucket ORDER BY d.DestinationId) d
+WHERE e.DestinationId IS NULL;
+GO

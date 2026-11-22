@@ -3,16 +3,16 @@
 @inject MetadataRepository Repo
 @inject AccessService Access
 
-<PageTitle>GCS Exports</PageTitle>
+<PageTitle>Exports</PageTitle>
 
 <div class="d-flex align-items-center mb-3">
-    <h1 class="h4 mb-0 me-auto">GCS Export Jobs <HelpLink Topic="export" Title="GCS exports" /></h1>
+    <h1 class="h4 mb-0 me-auto">Export Jobs <HelpLink Topic="export" Title="Exports" /></h1>
     @if (canEdit) { <a class="btn btn-sm btn-primary" href="/export/new">+ New export</a> }
 </div>
 
 <table class="table table-sm table-hover bg-white">
     <thead class="table-light">
-        <tr><th>Name</th><th>Source</th><th>Mode</th><th>Destination (GCS)</th><th>Format</th><th>Schedule</th><th>Modified by</th></tr>
+        <tr><th>Name</th><th>Source</th><th>Mode</th><th>Destination</th><th>Format</th><th>Schedule</th><th>Modified by</th></tr>
     </thead>
     <tbody>
         @foreach (var e in jobs)
@@ -21,7 +21,7 @@
                 <td><a href="/export/@e.ExportJobId">@e.Name</a> @if (!e.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
                 <td class="mono">@e.SourceServerName / @e.SourceDatabase / @(e.ExportMode switch { ExportMode.Query => "(query)", ExportMode.AllTables => $"(all collected tables{(string.IsNullOrEmpty(e.SourceSchema) ? "" : " in " + e.SourceSchema)})", _ => $"{e.SourceSchema}.{e.SourceTable}" })</td>
                 <td>@e.ExportMode</td>
-                <td class="mono small">gs://@e.Bucket/@e.ObjectNameTemplate</td>
+                <td class="small"><b>@(e.DestinationName ?? "gcs-" + e.Bucket)</b> <span class="text-muted">(@(e.DestinationProvider == StorageProviders.AzureBlob ? "Azure" : e.DestinationProvider ?? "Gcs"))</span><br /><span class="mono">@e.ObjectNameTemplate</span></td>
                 <td class="small">@(e.FileFormat == ExportFileFormat.Parquet ? $"Parquet · {e.ParquetCompression.ToLowerInvariant()}" : $"CSV {(e.Delimiter == "\t" ? "TAB" : e.Delimiter)}{(e.Gzip ? " · gzip" : "")}") @(e.MaxRowsPerFile is null ? "" : $"· {e.MaxRowsPerFile:N0}/file")</td>
                 <td><ScheduleCell Kind="@JobRef.Export" JobId="e.ExportJobId" Cron="@e.CronExpression" AfterJobs="@(e.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
                 <td class="small">@e.ModifiedBy<br /><span class="text-muted">@Ui.Local(e.ModifiedAtUtc)</span></td>

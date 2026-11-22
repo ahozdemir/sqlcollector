@@ -7,6 +7,8 @@
 #   src-crm   demo source SQL Server 2022  -> localhost,14332  (DB: CRM)
 #   src-seed  one-shot: fills ERP and CRM with test data (only if missing, RESEED=1 forces it)
 #   fakegcs   Google Cloud Storage emulator -> http://localhost:4443  (bucket: test-bucket)
+#   s3mock    S3-compatible storage -> http://localhost:9090 (any access key, bucket dwh-exports, path-style)
+#   azurite   Azure Blob Storage emulator -> http://127.0.0.1:10000/devstoreaccount1 (container: exports)
 #
 # Profile "full"   : everything in Docker, deployment mode EMBEDDED (one app = Web+Worker)
 # Profile "shared" : everything in Docker, deployment mode SHARED HANGFIRE
@@ -90,6 +92,18 @@ services:
     command: ["-scheme", "http", "-port", "4443", "-public-host", "localhost:4443", "-data", "/data", "-filesystem-root", "/storage"]
     ports: ["${GCS_PORT:-4443}:4443"]
     volumes: ["./fake-gcs:/data:ro", "gcs-storage:/storage"]
+
+  # ---------------------------------------------------------------- other export destinations (Administration → Destinations)
+  s3mock:   # S3-compatible test server (accepts any access key)
+    image: adobe/s3mock:3.12.0
+    environment:
+      initialBuckets: dwh-exports
+    ports: ["${S3MOCK_PORT:-9090}:9090"]
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck", "--loose"]
+    ports: ["${AZURITE_PORT:-10000}:10000"]
 
   # ---------------------------------------------------------------- SMTP sink for alert e-mails (UI: http://localhost:8025)
   mailpit:

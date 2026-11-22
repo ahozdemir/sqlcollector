@@ -10,10 +10,10 @@
 @using Microsoft.Data.SqlClient
 @using SqlDataCollector.Export
 
-<PageTitle>@(IsNew ? "New GCS export" : job.Name)</PageTitle>
+<PageTitle>@(IsNew ? "New export" : job.Name)</PageTitle>
 
 <div class="d-flex align-items-center mb-3">
-    <h1 class="h4 mb-0 me-auto">@(IsNew ? "New GCS export job" : $"GCS export: {job.Name}")</h1>
+    <h1 class="h4 mb-0 me-auto">@(IsNew ? "New export job" : $"Export: {job.Name}")</h1>
     <a class="btn btn-sm btn-outline-secondary" href="/export">← List</a>
 </div>
 
@@ -125,11 +125,18 @@
 
     <div class="col-xl-6">
         <div class="card mb-3"><div class="card-body">
-            <div class="section-title mb-2">2 · Google Cloud Storage <HelpLink Topic="gcs" Title="GCS settings" /></div>
+            <div class="section-title mb-2">2 · Destination <HelpLink Topic="destinations" Title="Export destinations" /></div>
             <div class="row g-2">
                 <div class="col-md-5">
-                    <label class="form-label small">Bucket</label>
-                    <input class="form-control form-control-sm mono" @bind="job.Bucket" placeholder="company-dwh-exports" />
+                    <label class="form-label small">Destination @if (isAdmin) { <a href="/admin/destinations" class="small ms-1">manage</a> }</label>
+                    <select class="form-select form-select-sm" @bind="job.DestinationId" @bind:after="DestinationChanged">
+                        <option value="">Choose…</option>
+                        @foreach (var d in destinations.Where(d => d.IsActive || d.DestinationId == job.DestinationId))
+                        {
+                            <option value="@d.DestinationId">@d.Name (@d.Summary)@(d.IsActive ? "" : " – inactive")</option>
+                        }
+                    </select>
+                    @if (destinations.Count == 0) { <div class="form-text text-danger">No destination yet – an Admin adds one under Administration → Destinations.</div> }
                 </div>
                 <div class="col-md-7">
                     <label class="form-label small">Object name template</label>
@@ -137,7 +144,7 @@
                 </div>
                 <div class="col-12 small text-muted">
                     Tokens: {Name} {Database} {Schema} {Table} {Date} {DateCompact} {Time} {Part}. Example:
-                    <span class="mono">gs://@(job.Bucket)/@ExampleObjectName</span>
+                    <span class="mono">@ExampleAddress</span>
                 </div>
             </div>
         </div></div>
@@ -204,7 +211,7 @@
                     <label class="form-label small">Max rows per file</label>
                     <input type="number" min="1000" class="form-control form-control-sm" @bind="job.MaxRowsPerFile" placeholder="single file" />
                 </div>
-                <div class="col-12 small text-muted">Files are uploaded to GCS as plain CSV unless "gzip uploaded files" is ticked. The local archive on the export Worker (Collector:KeepLocalFiles) is always stored as .csv.gz.</div>
+                <div class="col-12 small text-muted">Files are uploaded as plain CSV unless "gzip uploaded files" is ticked. The local archive on the export Worker (Collector:KeepLocalFiles) is always stored as .csv.gz.</div>
                 <div class="col-md-8 d-flex flex-wrap gap-3 align-items-end small">
                     <div class="form-check"><input class="form-check-input" type="checkbox" id="gz" @bind="job.Gzip" /><label class="form-check-label" for="gz">gzip uploaded files</label></div>
                     <div class="form-check"><input class="form-check-input" type="checkbox" id="bom" @bind="job.Utf8Bom" /><label class="form-check-label" for="bom">UTF-8 BOM (Excel)</label></div>
@@ -261,6 +268,23 @@
     private bool loaded, canEdit, busy, confirmDelete, selectedTableHasNoLoadId;
     private string? error, info;
     private List<SqlServerDef> servers = [];
+    private List<DestinationDef> destinations = [];
+    private bool isAdmin;
+
+    // example address of the first file in the chosen destination
+    private string ExampleAddress => destinations.FirstOrDefault(d => d.DestinationId == job.DestinationId) is { } d
+        ? d.Provider switch
+        {
+            StorageProviders.Gcs => $"gs://{d.Bucket}/{ExampleObjectName}",
+            StorageProviders.S3 => $"s3://{d.Bucket}/{ExampleObjectName}",
+            _ => $"{(d.Endpoint ?? "https://<account>.blob.core.windows.net").TrimEnd('/')}/{d.Bucket}/{ExampleObjectName}"
+        }
+        : ExampleObjectName;
+
+    private void DestinationChanged()
+    {
+        if (destinations.FirstOrDefault(d => d.DestinationId == job.DestinationId) is { } d) job.Bucket = d.Bucket;
+    }
     private IReadOnlyList<string> dbs = [];
     private IReadOnlyList<TableInfo> tables = [];
     private IReadOnlyList<CollectedTable> collected = [];
@@ -284,9 +308,13 @@
         try
         {
             servers = (await Access.AllowedServersAsync("Any")).ToList();
+            destinations = (await Repo.GetDestinationsAsync()).ToList();
+            isAdmin = await Access.IsAdminAsync();
             if (IsNew)
             {
                 canEdit = await Access.CanEditAsync();
+                // one active destination: preselect it
+                if (destinations.Count(d => d.IsActive) == 1) { job.DestinationId = destinations.First(d => d.IsActive).DestinationId; DestinationChanged(); }
                 if (FromExtract is int ex && await Repo.GetExtractJobAsync(ex) is { } src)
                 {
                     job.ExportMode = ExportMode.Incremental; job.ObjectNameTemplate = ObjectNameTemplate.DefaultSingle;
@@ -408,7 +436,9 @@
             if (job.ExportMode == ExportMode.Query && string.IsNullOrWhiteSpace(job.SourceQuery)) errs.Add("The query cannot be empty.");
             if (job.ExportMode == ExportMode.Incremental && selectedTableHasNoLoadId) errs.Add("Incremental mode requires a _LoadId column in the table.");
             if (job.ExportMode == ExportMode.AllTables && !job.ObjectNameTemplate.Contains("{Table}")) errs.Add("In All collected tables mode the object name template must contain {Table}, otherwise files would overwrite each other.");
-            if (string.IsNullOrWhiteSpace(job.Bucket)) errs.Add("Bucket is required.");
+            if (destinations.FirstOrDefault(d => d.DestinationId == job.DestinationId) is not { } destination) errs.Add("Choose a destination.");
+            else if (!destination.IsActive) errs.Add($"The destination '{destination.Name}' is inactive.");
+            else job.Bucket = destination.Bucket;
             if (job.TriggerMode == JobTriggerMode.Schedule && !JobRegistrar.Preview(job.CronExpression, job.TimeZoneId).Ok) errs.Add("Invalid cron expression.");
             if (await Dependencies.ValidateAsync(new JobRef(JobRef.Export, job.ExportJobId), job.TriggerMode, upstreams) is { } dependencyError) errs.Add(dependencyError);
             if (errs.Count > 0) throw new InvalidOperationException(string.Join("\n", errs));

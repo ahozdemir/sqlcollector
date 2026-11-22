@@ -6,8 +6,8 @@
 projects and namespaces, the Windows service, the program/data folders and the database objects.
 
 A .NET 10 application that collects data on a schedule from several SQL Server sources into tables on one target
-SQL Server, manages retention on the target, and exports the collected data every night as CSV files to
-Google Cloud Storage. Scheduling and execution use **Hangfire**. The UI is **Blazor Server** (English) with an
+SQL Server, manages retention on the target, and exports the collected data every night as CSV or Parquet files to
+Google Cloud Storage, Amazon S3 (or S3-compatible storage) or Azure Blob Storage. Scheduling and execution use **Hangfire**. The UI is **Blazor Server** (English) with an
 in-app **Help** section; users sign in with **Active Directory** (Windows/Negotiate), plus one local admin account.
 
 ---
@@ -83,7 +83,12 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - Failed loads are rolled back; loads interrupted by a crash are cleaned up by the next sync
 - decimal(38,x) values are transferred exactly (`SqlDecimal`)
 
-**GCS export**
+**Export (Google Cloud Storage, Amazon S3 / S3-compatible, Azure Blob Storage)**
+- **Destinations** (Admin → *Destinations*): named targets per provider – GCS (Settings credential or own JSON key), Amazon S3
+  (access key or the server's AWS identity), S3-compatible storage such as MinIO, Wasabi or Ceph (endpoint, path-style URLs)
+  and Azure Blob Storage incl. ADLS Gen2 (connection string, SAS, account key or Managed Identity). Keys are stored
+  encrypted (`Secrets:Key`) and never shown again; *Test* writes a small object. Each export job picks a destination;
+  existing GCS jobs are given one automatically on upgrade. Every provider: multipart upload and a size check.
 - **All collected tables** (nightly): every extract target table in a database (optionally one schema), **one CSV set per
   table**, only the loads since that table's previous export – i.e. "what was collected today". New tables are picked up
   automatically. Per-table state: one failing table does not block the others; a retry only redoes what is missing
@@ -330,7 +335,8 @@ Prerequisites: .NET 10 SDK, Docker Desktop (Linux containers), a local SQL Serve
 Windows authentication, PowerShell.
 
 ```powershell
-.\scripts\dev.ps1 setup      # Docker sources ERP (:14331) + CRM (:14332) with demo data, GCS emulator (:4443),
+.\scripts\dev.ps1 setup      # Docker sources ERP (:14331) + CRM (:14332) with demo data, storage emulators GCS (:4443),
+                             # S3-compatible s3mock (:9090, bucket dwh-exports), Azure Azurite (:10000, container exports),
                              # SdcMeta + SdcDwh on the local SQL Server, 8 extract jobs + 1 export job, appsettings.LocalTest.json
 .\scripts\dev.ps1 run        # app on http://localhost:5080 (admin / Admin!Dev2026, or your Windows account = Admin)
 .\scripts\dev.ps1 smoke      # all extracts → simulate source changes → incremental → all-tables export → check emulator

@@ -31,9 +31,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                e.SourceSchema, e.SourceTable, e.SourceQuery, e.ColumnList, e.IncludeTechnicalColumns, e.CronExpression,
                e.TimeZoneId, e.Bucket, e.ObjectNameTemplate, e.Delimiter, e.QuoteMode, e.NullValue, e.LineEnding,
                e.Utf8Bom, e.Gzip, e.MaxRowsPerFile, e.UploadWhenEmpty, e.WriteManifest, e.CommandTimeoutSec,
-               e.NotifyEmails, e.FileFormat, e.ParquetCompression, e.TriggerMode, e.IsActive, e.CreatedBy, e.ModifiedBy, e.ModifiedAtUtc
+               e.NotifyEmails, e.FileFormat, e.ParquetCompression, e.TriggerMode, e.IsActive, e.CreatedBy, e.ModifiedBy, e.ModifiedAtUtc,
+               e.DestinationId, dst.Name AS DestinationName, dst.Provider AS DestinationProvider
         FROM etl.ExportJob e
         JOIN etl.SqlServer s ON s.SqlServerId = e.SourceServerId
+        LEFT JOIN etl.Destination dst ON dst.DestinationId = e.DestinationId
         """;
 
     private SqlConnection Conn() => factory.Metadata();
@@ -330,11 +332,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             e.ExportJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExportJob (Name, ExportMode, SourceServerId, SourceDatabase, SourceSchema, SourceTable, SourceQuery, ColumnList,
                     IncludeTechnicalColumns, CronExpression, TimeZoneId, Bucket, ObjectNameTemplate, Delimiter, QuoteMode, NullValue,
-                    LineEnding, Utf8Bom, Gzip, MaxRowsPerFile, UploadWhenEmpty, WriteManifest, CommandTimeoutSec, NotifyEmails, FileFormat, ParquetCompression, TriggerMode, IsActive, CreatedBy, ModifiedBy)
+                    LineEnding, Utf8Bom, Gzip, MaxRowsPerFile, UploadWhenEmpty, WriteManifest, CommandTimeoutSec, NotifyEmails, FileFormat, ParquetCompression, DestinationId, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExportJobId
                 VALUES (@Name, @ExportMode, @SourceServerId, @SourceDatabase, @SourceSchema, @SourceTable, @SourceQuery, @ColumnList,
                     @IncludeTechnicalColumns, @CronExpression, @TimeZoneId, @Bucket, @ObjectNameTemplate, @Delimiter, @QuoteMode, @NullValue,
-                    @LineEnding, @Utf8Bom, @Gzip, @MaxRowsPerFile, @UploadWhenEmpty, @WriteManifest, @CommandTimeoutSec, @NotifyEmails, @FileFormat, @ParquetCompression, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
+                    @LineEnding, @Utf8Bom, @Gzip, @MaxRowsPerFile, @UploadWhenEmpty, @WriteManifest, @CommandTimeoutSec, @NotifyEmails, @FileFormat, @ParquetCompression, @DestinationId, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, e);
         }
         else
@@ -346,7 +348,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                     Bucket = @Bucket, ObjectNameTemplate = @ObjectNameTemplate, Delimiter = @Delimiter, QuoteMode = @QuoteMode,
                     NullValue = @NullValue, LineEnding = @LineEnding, Utf8Bom = @Utf8Bom, Gzip = @Gzip, MaxRowsPerFile = @MaxRowsPerFile,
                     UploadWhenEmpty = @UploadWhenEmpty, WriteManifest = @WriteManifest, CommandTimeoutSec = @CommandTimeoutSec,
-                    NotifyEmails = @NotifyEmails, FileFormat = @FileFormat, ParquetCompression = @ParquetCompression, TriggerMode = @TriggerMode, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
+                    NotifyEmails = @NotifyEmails, FileFormat = @FileFormat, ParquetCompression = @ParquetCompression, DestinationId = @DestinationId, TriggerMode = @TriggerMode, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExportJobId = @ExportJobId;
                 """, e);
         }
@@ -559,6 +561,69 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             UPDATE etl.JobTrigger SET LastTriggeredAtUtc = SYSUTCDATETIME() WHERE JobKind = @Kind AND JobId = @Id;
             IF @@ROWCOUNT = 0 INSERT etl.JobTrigger (JobKind, JobId, LastTriggeredAtUtc) VALUES (@Kind, @Id, SYSUTCDATETIME());
             """, new { job.Kind, job.Id });
+    }
+
+    // ================================================================ export destinations
+
+    private const string DestinationColumns = """
+        DestinationId, Name, Provider, Bucket, Region, Endpoint, AuthMethod, AccessKeyId,
+        CAST(CASE WHEN Secret IS NULL THEN 0 ELSE 1 END AS bit) AS HasSecret, ForcePathStyle, IsActive, ModifiedBy, ModifiedAtUtc
+        """;
+
+    public async Task<IReadOnlyList<DestinationDef>> GetDestinationsAsync()
+    {
+        await using var c = Conn();
+        return (await c.QueryAsync<DestinationDef>($"SELECT {DestinationColumns} FROM etl.Destination ORDER BY Name")).AsList();
+    }
+
+    /// <summary>One destination; the encrypted secret only when it is about to be used (uploads, test).</summary>
+    public async Task<DestinationDef?> GetDestinationAsync(int id, bool includeSecret = false)
+    {
+        await using var c = Conn();
+        return await c.QuerySingleOrDefaultAsync<DestinationDef>(
+            $"SELECT {DestinationColumns}{(includeSecret ? ", Secret" : "")} FROM etl.Destination WHERE DestinationId = @id", new { id });
+    }
+
+    /// <summary>Saves a destination. <paramref name="protectedSecret"/>: new encrypted secret, null = keep the stored one, "" = remove it.</summary>
+    public async Task<int> SaveDestinationAsync(DestinationDef d, string? protectedSecret, string user)
+    {
+        await using var c = Conn();
+        d.ModifiedBy = user;
+        bool isNew = d.DestinationId == 0;
+        var p = new DynamicParameters(d);
+        p.Add("newSecret", protectedSecret == "" ? null : protectedSecret);   // not "secret": SQL parameter names ignore case (Secret is a property)
+        p.Add("setSecret", protectedSecret is not null);
+        if (isNew)
+            d.DestinationId = await c.ExecuteScalarAsync<int>("""
+                INSERT etl.Destination (Name, Provider, Bucket, Region, Endpoint, AuthMethod, AccessKeyId, Secret, ForcePathStyle, IsActive, ModifiedBy)
+                OUTPUT inserted.DestinationId
+                VALUES (@Name, @Provider, @Bucket, @Region, @Endpoint, @AuthMethod, @AccessKeyId, @newSecret, @ForcePathStyle, @IsActive, @ModifiedBy);
+                """, p);
+        else
+            await c.ExecuteAsync("""
+                UPDATE etl.Destination SET Name = @Name, Provider = @Provider, Bucket = @Bucket, Region = @Region, Endpoint = @Endpoint,
+                       AuthMethod = @AuthMethod, AccessKeyId = @AccessKeyId, Secret = CASE WHEN @setSecret = 1 THEN @newSecret ELSE Secret END,
+                       ForcePathStyle = @ForcePathStyle, IsActive = @IsActive, ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
+                WHERE DestinationId = @DestinationId;
+                -- the bucket of the jobs that use it follows (kept for display and older code paths)
+                UPDATE etl.ExportJob SET Bucket = @Bucket WHERE DestinationId = @DestinationId AND Bucket <> @Bucket;
+                """, p);
+        // the secret is never written to the audit log
+        await AuditAsync(user, isNew ? "Create" : "Update", "Destination", d.DestinationId, new
+        {
+            d.Name, d.Provider, d.Bucket, d.Region, d.Endpoint, d.AuthMethod, d.AccessKeyId, d.ForcePathStyle, d.IsActive,
+            Secret = protectedSecret is null ? "unchanged" : protectedSecret == "" ? "removed" : "changed"
+        });
+        return d.DestinationId;
+    }
+
+    public async Task DeleteDestinationAsync(int id, string user)
+    {
+        await using var c = Conn();
+        var used = await c.QueryAsync<string>("SELECT Name FROM etl.ExportJob WHERE DestinationId = @id", new { id });
+        if (used.Any()) throw new InvalidOperationException($"The destination is used by export job(s): {string.Join(", ", used)}.");
+        await c.ExecuteAsync("DELETE etl.Destination WHERE DestinationId = @id", new { id });
+        await AuditAsync(user, "Delete", "Destination", id, null);
     }
 
     // ================================================================ data quality

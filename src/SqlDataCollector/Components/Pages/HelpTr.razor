@@ -4,11 +4,11 @@
 <section id="overview">
     <h2>Genel bakış</h2>
     <p><b>SqlHarbor</b>, şirketinizdeki SQL Server veritabanlarından (<b>kaynak</b>) belirlediğiniz saatlerde veri toplar, bunları tek bir SQL Server'da (<b>hedef</b>, genelde DWH)
-       tablolara yazar, istediğiniz süre kadar saklar ve isterseniz her gece <b>Google Cloud Storage (GCS)</b>'e dosya olarak gönderir.</p>
+       tablolara yazar, istediğiniz süre kadar saklar ve isterseniz her gece dosya olarak bir bulut depolamaya gönderir: <b>Google Cloud Storage (GCS)</b>, <b>Amazon S3</b> (veya MinIO gibi S3 uyumlu bir depo) ya da <b>Azure Blob Storage</b>.</p>
     <p>Üç temel kavram var:</p>
     <ul>
         <li><b>Extract job</b> – "şu kaynaktaki şu tabloyu, şu saatte, şu hedef tabloya kopyala" tanımıdır.</li>
-        <li><b>Export job</b> – "toplanan veriyi CSV veya Parquet dosyası olarak GCS'e gönder" tanımıdır.</li>
+        <li><b>Export job</b> – "toplanan veriyi CSV veya Parquet dosyası olarak şu hedefe (bucket veya container) gönder" tanımıdır.</li>
         <li><b>Retention (saklama süresi)</b> – hedefteki eski veriyi N gün sonra otomatik siler.</li>
     </ul>
     <p>Teknik ad <i>SqlDataCollector</i>'dır: Windows servisi, klasörler ve veritabanı nesneleri bu adı taşır.</p>
@@ -19,11 +19,12 @@
     <ol>
         <li><b>İlk giriş:</b> kurulumdan sonra sunucunun kendisinde <code>https://localhost</code> adresini açın ve <b>Local administrator</b> ile yeni bir şifre belirleyin.
             Hazır (varsayılan) şifre yoktur; bu ekran yalnızca sunucunun kendisinden açılabilir.</li>
-        <li><b>Settings:</b> Google Cloud servis hesabı anahtarını (JSON) yükleyin. Kurumsal HTTPS sertifikanız varsa onu da buradan yükleyin.</li>
+        <li><b>Settings:</b> kurumsal HTTPS sertifikanız varsa buradan yükleyin. GCS'e gönderecekseniz Google Cloud servis hesabı anahtarını (JSON) da buraya yükleyin.</li>
+        <li><b>Destinations:</b> dosyaların gideceği yeri (GCS, S3 / S3 uyumlu veya Azure Blob) ekleyin ve <b>Test</b> ile deneyin.</li>
         <li><b>Servers:</b> kaynak ve hedef SQL Server'ları ekleyin, <b>Test</b> ile bağlantıyı deneyin.</li>
         <li><b>Permissions:</b> AD gruplarına rol verin (Admin, Editor, Viewer) ve Editor'ların hangi sunucu ve veritabanlarını kullanabileceğini belirleyin.</li>
         <li><b>Extract Jobs → New job:</b> kaynağı seçin → <b>Preview</b> ile veriye bakın → hedefi seçin → yükleme modunu ve zamanlamayı seçin → <b>Save</b>.</li>
-        <li><b>GCS Exports → New export:</b> hedef veritabanını, <b>All collected tables</b> modunu, bucket'ı ve gece saatini seçin.</li>
+        <li><b>Exports → New export:</b> hedef veritabanını, <b>All collected tables</b> modunu, destination'ı ve gece saatini seçin.</li>
         <li><b>Status</b> ve <b>Run history</b> sayfalarından takip edin. Hemen denemek için job sayfasında <b>Run now</b>'a basın.</li>
     </ol>
 </section>
@@ -41,11 +42,11 @@
         <li><b>Save and run now</b> ile kaydedip hemen bir kez çalıştırın; sonucu <b>Run history</b>'de görün.</li>
     </ol>
 
-    <h3>2. Toplanan her şeyi her gece GCS'e göndermek</h3>
+    <h3>2. Toplanan her şeyi her gece buluta göndermek</h3>
     <ol>
-        <li><b>GCS Exports → New export</b>. Sunucu olarak hedef sunucuyu, veritabanı olarak DWH'yi seçin.</li>
+        <li><b>Exports → New export</b>. Sunucu olarak hedef sunucuyu, veritabanı olarak DWH'yi seçin.</li>
         <li>Mod: <b>All collected tables</b>. Her tablo için ayrı bir dosya seti oluşur ve yalnızca son export'tan bu yana toplanan veri gider.</li>
-        <li><b>Bucket</b> adını yazın. Dosya adı şablonunu olduğu gibi bırakabilirsiniz.</li>
+        <li><b>2 · Destination</b> listesinden dosyaların gideceği yeri seçin (listede yoksa bir Admin'in <b>Destinations</b> sayfasından eklemesi gerekir). Dosya adı şablonunu olduğu gibi bırakabilirsiniz.</li>
         <li><b>3 · File format</b>: Excel veya genel kullanım için <b>CSV</b>; BigQuery, Spark veya pandas için daha küçük ve tipli <b>Parquet</b>.</li>
         <li><b>4 · Trigger</b>: saat vermek yerine <b>After other jobs</b> seçip extract job'larınızı işaretleyin. Export, extract'ler bitince kendiliğinden başlar.</li>
     </ol>
@@ -81,13 +82,13 @@
             "After other jobs" ile tetiklenen bir job'ın beklediği bütün job'ların başarıyla bitmiş olması gerekir.</dd>
 
         <dt>Kalite kontrolü veriyi değiştirir mi?</dt>
-        <dd>Hayır. Yalnızca kontrol eder ve haber verir. <b>Error</b> seviyesinde, bu job'dan sonra çalışan export'u bekletir; böylece hatalı veri GCS'e gitmez.</dd>
+        <dd>Hayır. Yalnızca kontrol eder ve haber verir. <b>Error</b> seviyesinde, bu job'dan sonra çalışan export'u bekletir; böylece hatalı veri dışarı gitmez.</dd>
 
         <dt>Bir job hata alırsa yarım veri kalır mı?</dt>
         <dd>Hayır. Başarısız bir yüklemenin yazdığı satırlar silinir; Merge ve Rebuild tek adımda (transaction) çalışır, yarım kalmaz.</dd>
 
         <dt>Şifreler nerede saklanıyor?</dt>
-        <dd>SQL şifresi saklanmaz; bağlantılar servisin Windows hesabıyla yapılır. GCS anahtarı veritabanında şifreli durur.</dd>
+        <dd>SQL şifresi saklanmaz; bağlantılar servisin Windows hesabıyla yapılır. GCS, S3 ve Azure anahtarları veritabanında şifreli durur.</dd>
     </dl>
 </section>
 
@@ -198,9 +199,27 @@
 </section>
 
 <section id="export">
-    <h2>GCS export'ları</h2>
-    <p>Export job'ları DWH'deki veriyi dosyaya yazar ve Google Cloud Storage'a yükler. Yükleme yarıda kesilirse kaldığı yerden devam eder, hata alırsa tekrar dener
+    <h2>Export'lar</h2>
+    <p>Export job'ları DWH'deki veriyi dosyaya yazar ve seçilen <a href="/help#destinations">hedefe</a> (GCS, S3 veya Azure Blob) yükler. Yükleme yarıda kesilirse kaldığı yerden devam eder, hata alırsa tekrar dener
        ve sonunda dosya boyutunu doğrular. Dosyalar önce Worker sunucusunun diskinde günlük klasörlere yazılır; istenirse sıkıştırılarak bir süre arşivde tutulur.</p>
+</section>
+
+<section id="destinations">
+    <h2>Export hedefleri (GCS, S3, Azure)</h2>
+    <p><b>Destination</b>, dosyaların gideceği yerdir: bir bucket (GCS, S3) veya container (Azure) ve oraya nasıl bağlanılacağı. Admin'ler
+       <b>Administration → Destinations</b> sayfasından yönetir; her export job bir destination seçer. Bir destination'ı değiştirdiğinizde (yeni anahtar, başka bucket)
+       onu kullanan bütün job'lar bir sonraki çalışmada yeni ayarı kullanır.</p>
+    <ul>
+        <li><b>Google Cloud Storage:</b> bucket adı yeterli. Giriş <b>Credential of the Settings page</b> ise Settings sayfasındaki GCS anahtarı kullanılır; <b>Own service account key (JSON)</b> seçilirse yalnızca bu hedef için ayrı bir JSON anahtarı yüklenir.</li>
+        <li><b>Amazon S3 / S3 uyumlu:</b> bucket ve bölge (region). MinIO, Wasabi, Ceph, Cloudflare R2 gibi depolarda ayrıca <b>Endpoint</b> adresi girilir ve genelde <b>Path-style</b> işaretlenir.
+            Giriş için <b>Access key and secret</b> verilir ya da <b>Server's AWS identity</b> ile sunucunun kendi AWS kimliği (ortam değişkeni, rol) kullanılır. Kullanıcının bucket'a yazma (<code>s3:PutObject</code>) yetkisi olmalı.</li>
+        <li><b>Azure Blob Storage:</b> container adı ve hesap adresi (<code>https://&lt;hesap&gt;.blob.core.windows.net</code>). Giriş: storage account key, connection string,
+            SAS token ya da <b>Managed Identity (no key)</b> (sunucunun kendi kimliği; <i>Storage Blob Data Contributor</i> rolü gerekir).</li>
+    </ul>
+    <p>Anahtarlar şifreli saklanır ve bir daha gösterilmez; değiştirmek istemiyorsanız alanı boş bırakın. Bucket veya container önceden oluşturulmuş olmalıdır.
+       <b>Test</b> butonu küçük bir deneme dosyası (<code>_sdc_connection_test/…</code>) yazar. Kullanımdaki bir destination silinemez; pasif yapılabilir,
+       pasif bir hedefe giden export başka bir yere yazmak yerine hata verir.</p>
+    <p>Güncellemeden önce GCS'e giden job'larınız varsa, her bucket için <code>gcs-&lt;bucket&gt;</code> adlı bir destination otomatik oluşturulur; job'lar aynen çalışmaya devam eder.</p>
 </section>
 
 <section id="export-modes">
@@ -221,7 +240,7 @@
 <section id="gcs">
     <h2>GCS ayarları ve dosya adları</h2>
     <p>Sunucuya Google aracı kurmak gerekmez. Google Cloud'da bir <b>servis hesabı</b> oluşturun, bucket üzerinde <i>Storage Object Creator</i> yetkisi verin
-       ve JSON anahtarını <b>Settings</b> sayfasından yükleyin. API key ile GCS'e yazılamaz.</p>
+       ve JSON anahtarını <b>Settings</b> sayfasından yükleyin. API key ile GCS'e yazılamaz. Bu anahtar, girişi <b>Credential of the Settings page</b> olan GCS destination'larında kullanılır.</p>
     <p>Dosya adı şablonundaki değişkenler:</p>
     <table class="table table-sm table-bordered bg-white">
         <tbody>
@@ -293,7 +312,7 @@
     </table>
     <ul>
         <li><b>Warning</b> seviyesi yalnızca uyarır. <b>Error</b> seviyesinde, bu job'dan sonra çalışan job'lar (örn. export) job'ın <b>son</b> yüklemesi kontrolden geçene kadar bekler;
-            böylece hatalı veri GCS'e gitmez.</li>
+            böylece hatalı veri dışarı gitmez.</li>
         <li>Sonuçlar job sayfasında, <b>Data quality</b> sayfasında ve Run history'deki <i>quality</i> rozetinde görünür; sorunlarda alarm gider.</li>
         <li><b>Tazelik:</b> "N saattir sağlıklı yükleme yok" alarmı için job formuna saat yazın.</li>
     </ul>
@@ -305,7 +324,7 @@
     <ul>
         <li><b>Her yüklemede:</b> kaynaktan okunan satır sayısı = hedefe yazılan satır sayısı. Fark varsa yükleme geri alınır ve job hata verir.</li>
         <li><b>Her export'ta:</b> DWH'den okunan satır sayısı = dosyalardaki satır sayısı (dosyalar yeniden okunarak sayılır). Fark varsa hiçbir şey yüklenmez.
-            Yüklemeden sonra her dosyanın boyutu GCS'te ayrıca kontrol edilir.</li>
+            Yüklemeden sonra her dosyanın boyutu hedef depoda ayrıca kontrol edilir.</li>
     </ul>
     <h3>Tutarlı anlık görüntü (snapshot)</h3>
     <p>İşlemlerin sürdüğü bir kaynak, okunurken değişir. <b>Read a consistent snapshot</b> açıkken kaynak tek bir anın fotoğrafı gibi okunur:
@@ -394,7 +413,7 @@
         </tbody>
     </table>
     <ul>
-        <li><b>Exported files only:</b> DWH'de gerçek veri kalır, GCS'e giden dosyalarda maskelenir.</li>
+        <li><b>Exported files only:</b> DWH'de gerçek veri kalır, dışarı giden dosyalarda maskelenir.</li>
         <li><b>Already when collecting:</b> veri DWH'ye de maskeli yazılır.</li>
         <li><b>Export guard:</b> her export'un ilk 500 satırında kuralı olmayan kişisel veri (e-posta, TCKN, IBAN, kart, telefon) aranır.
             <b>Warn</b> uyarı yazar, <b>Block</b> dosyayı hiç yüklemez.</li>

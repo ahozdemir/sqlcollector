@@ -1,0 +1,285 @@
+@page "/admin/destinations"
+@attribute [Authorize(Policy = AppRoles.Admin)]
+@using SqlDataCollector.Storage
+@inject MetadataRepository Repo
+@inject ObjectStoreFactory Stores
+@inject SecretProtector Secrets
+@inject AccessService Access
+
+<PageTitle>Destinations</PageTitle>
+
+<h1 class="h4 mb-2">Export destinations <HelpLink Topic="destinations" Title="Export destinations" /></h1>
+<p class="small text-muted">Where export jobs upload their files: Google Cloud Storage, Amazon S3 and S3-compatible storage (MinIO, Wasabi, Ceph, …) or Azure Blob Storage.
+    Keys are stored encrypted and never shown again. Each export job picks one destination.</p>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2" style="white-space: pre-line">@error</div> }
+@if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2">@info</div> }
+@if (!Secrets.IsConfigured) { <div class="alert alert-warning py-2 small">Secrets:Key is not configured: only destinations without a stored key can be used (GCS with the Settings credential, S3 with the server's AWS identity, Azure Managed Identity).</div> }
+
+<div class="d-flex align-items-center mb-1">
+    <div class="section-title me-auto">Destinations</div>
+    <button class="btn btn-sm btn-primary" @onclick="() => Edit(new DestinationDef())">+ New destination</button>
+</div>
+<table class="table table-sm table-hover bg-white">
+    <thead class="table-light"><tr><th>Name</th><th>Provider</th><th>Bucket / container</th><th>Endpoint / region</th><th>Authentication</th><th>Used by</th><th>State</th><th>Test</th><th></th></tr></thead>
+    <tbody>
+        @if (destinations.Count == 0) { <tr><td colspan="9" class="small text-muted">No destination yet.</td></tr> }
+        @foreach (var d in destinations)
+        {
+            <tr class="@(d.IsActive ? "" : "text-muted")">
+                <td>@d.Name</td>
+                <td class="small">@StorageProviders.Describe(d.Provider)</td>
+                <td class="mono small">@d.Bucket</td>
+                <td class="mono small">@(d.Endpoint ?? d.Region ?? "default")</td>
+                <td class="small">@AuthText(d.Provider, d.AuthMethod)@(d.HasSecret ? " · key stored" : "")</td>
+                <td class="small">@(usage.TryGetValue(d.DestinationId, out var n) ? $"{n} job(s)" : "–")</td>
+                <td>@(d.IsActive ? "Active" : "Inactive")</td>
+                <td class="small" style="max-width: 320px">
+                    @if (tests.TryGetValue(d.DestinationId, out var t)) { <span class="@(t.Ok ? "text-success" : "text-danger")">@t.Message</span> }
+                    else if (testing == d.DestinationId) { <span class="text-muted">testing…</span> }
+                </td>
+                <td class="text-nowrap">
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@(testing is not null)" @onclick="() => TestAsync(d)">Test</button>
+                    <button class="btn btn-sm btn-outline-primary" @onclick="() => Edit(d)">Edit</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (editing is not null)
+{
+    var d = editing;
+    <div class="card mb-3 border-primary"><div class="card-body">
+        <div class="section-title mb-2">@(d.DestinationId == 0 ? "New destination" : $"Edit destination: {d.Name}")</div>
+        <div class="row g-2">
+            <div class="col-md-4">
+                <label class="form-label small">Name</label>
+                <input class="form-control form-control-sm" @bind="d.Name" placeholder="e.g. aws-analytics" />
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small">Provider</label>
+                <select class="form-select form-select-sm" @bind="d.Provider" @bind:after="ProviderChanged">
+                    @foreach (var p in StorageProviders.All) { <option value="@p">@StorageProviders.Describe(p)</option> }
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small">@(d.Provider == StorageProviders.AzureBlob ? "Container" : "Bucket")</label>
+                <input class="form-control form-control-sm mono" @bind="d.Bucket" placeholder="@(d.Provider == StorageProviders.AzureBlob ? "exports" : "company-dwh-exports")" />
+            </div>
+
+            @if (d.Provider == StorageProviders.S3)
+            {
+                <div class="col-md-3">
+                    <label class="form-label small">Region</label>
+                    <input class="form-control form-control-sm mono" @bind="d.Region" placeholder="eu-central-1" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small">Endpoint (only for S3-compatible storage)</label>
+                    <input class="form-control form-control-sm mono" @bind="d.Endpoint" placeholder="https://minio.corp.local:9000 – empty for Amazon S3" />
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <div class="form-check small"><input class="form-check-input" type="checkbox" id="pathStyle" @bind="d.ForcePathStyle" /><label class="form-check-label" for="pathStyle">Path-style URLs (MinIO, Ceph)</label></div>
+                </div>
+            }
+            @if (d.Provider == StorageProviders.AzureBlob && d.AuthMethod != StorageAuthMethods.ConnectionString)
+            {
+                <div class="col-md-8">
+                    <label class="form-label small">Storage account URL</label>
+                    <input class="form-control form-control-sm mono" @bind="d.Endpoint" placeholder="https://myaccount.blob.core.windows.net" />
+                </div>
+            }
+
+            <div class="col-md-4">
+                <label class="form-label small">Authentication</label>
+                <select class="form-select form-select-sm" @bind="d.AuthMethod">
+                    @foreach (var m in AuthMethods(d.Provider)) { <option value="@m">@AuthText(d.Provider, m)</option> }
+                </select>
+            </div>
+            @if (d.Provider == StorageProviders.S3 && d.AuthMethod == StorageAuthMethods.Key)
+            {
+                <div class="col-md-4">
+                    <label class="form-label small">Access key ID</label>
+                    <input class="form-control form-control-sm mono" @bind="d.AccessKeyId" autocomplete="off" />
+                </div>
+            }
+            @if (d.AuthMethod != StorageAuthMethods.Default)
+            {
+                <div class="col-md-@(d.Provider == StorageProviders.S3 ? 4 : 8)">
+                    <label class="form-label small">@SecretLabel(d)</label>
+                    @if (d.Provider == StorageProviders.Gcs)
+                    {
+                        <InputFile class="form-control form-control-sm" accept=".json,application/json" OnChange="LoadKeyFileAsync" />
+                        @if (newSecret is not null) { <div class="form-text text-success">Key file read; saved with the destination.</div> }
+                    }
+                    else
+                    {
+                        <input type="password" class="form-control form-control-sm mono" @bind="newSecret" autocomplete="new-password"
+                               placeholder="@(d.HasSecret ? "stored – leave empty to keep" : "")" />
+                    }
+                </div>
+            }
+            <div class="col-md-2 d-flex align-items-end">
+                <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="dstActive" @bind="d.IsActive" /><label class="form-check-label small" for="dstActive">Active</label></div>
+            </div>
+            <div class="col-12 small text-muted">@Hint(d)</div>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save</button>
+            <button class="btn btn-sm btn-link" @onclick="() => { editing = null; newSecret = null; }">Cancel</button>
+            @if (d.DestinationId != 0) { <span class="ms-auto"></span><button class="btn btn-sm btn-outline-danger" @onclick="DeleteAsync">Delete</button> }
+        </div>
+    </div></div>
+}
+
+@code {
+    private List<DestinationDef> destinations = [];
+    private Dictionary<int, int> usage = [];
+    private Dictionary<int, (bool Ok, string Message)> tests = [];
+    private DestinationDef? editing;
+    private string? newSecret;
+    private string? originalAuth;
+    private int? testing;
+    private string? error, info;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            destinations = (await Repo.GetDestinationsAsync()).ToList();
+            usage = (await Repo.GetExportJobsAsync()).Where(e => e.DestinationId is not null)
+                .GroupBy(e => e.DestinationId!.Value).ToDictionary(g => g.Key, g => g.Count());
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private static string[] AuthMethods(string provider) => provider switch
+    {
+        StorageProviders.S3 => [StorageAuthMethods.Key, StorageAuthMethods.Default],
+        StorageProviders.AzureBlob => [StorageAuthMethods.ConnectionString, StorageAuthMethods.Sas, StorageAuthMethods.Key, StorageAuthMethods.Default],
+        _ => [StorageAuthMethods.Default, StorageAuthMethods.Key]
+    };
+
+    private static string AuthText(string provider, string method) => (provider, method) switch
+    {
+        (StorageProviders.Gcs, StorageAuthMethods.Default) => "Credential of the Settings page",
+        (StorageProviders.Gcs, _) => "Own service account key (JSON)",
+        (StorageProviders.S3, StorageAuthMethods.Key) => "Access key and secret",
+        (StorageProviders.S3, _) => "Server's AWS identity (role, environment)",
+        (_, StorageAuthMethods.ConnectionString) => "Connection string",
+        (_, StorageAuthMethods.Sas) => "SAS token",
+        (_, StorageAuthMethods.Key) => "Account key",
+        _ => "Managed Identity (no key)"
+    };
+
+    private static string SecretLabel(DestinationDef d) => (d.Provider, d.AuthMethod) switch
+    {
+        (StorageProviders.Gcs, _) => "Service account key (JSON file)",
+        (StorageProviders.S3, _) => "Secret access key",
+        (_, StorageAuthMethods.ConnectionString) => "Connection string",
+        (_, StorageAuthMethods.Sas) => "SAS token (container or account, with create and write)",
+        _ => "Account key"
+    };
+
+    private static string Hint(DestinationDef d) => d.Provider switch
+    {
+        StorageProviders.Gcs => "The service account needs Storage Object Creator on the bucket. 'Credential of the Settings page' uses the key uploaded on Settings, a key file from configuration or Workload Identity.",
+        StorageProviders.S3 => "The key needs s3:PutObject (and s3:GetObject for the size check) on the bucket. For MinIO, Wasabi or Ceph enter the endpoint; MinIO usually needs path-style URLs.",
+        _ => "The identity needs the Storage Blob Data Contributor role on the container (or a SAS with create/write). ADLS Gen2 accounts work through the same blob endpoint."
+    };
+
+    private void Edit(DestinationDef d)
+    {
+        error = info = null; newSecret = null;
+        originalAuth = d.DestinationId == 0 ? null : d.AuthMethod;
+        editing = new DestinationDef
+        {
+            DestinationId = d.DestinationId, Name = d.Name, Provider = d.Provider, Bucket = d.Bucket, Region = d.Region, Endpoint = d.Endpoint,
+            AuthMethod = d.AuthMethod, AccessKeyId = d.AccessKeyId, HasSecret = d.HasSecret, ForcePathStyle = d.ForcePathStyle,
+            IsActive = d.DestinationId == 0 || d.IsActive
+        };
+    }
+
+    private void ProviderChanged()
+    {
+        editing!.AuthMethod = AuthMethods(editing.Provider)[0];
+        editing.ForcePathStyle = false;
+        newSecret = null;
+    }
+
+    private async Task LoadKeyFileAsync(InputFileChangeEventArgs e)
+    {
+        error = null;
+        try
+        {
+            using var reader = new StreamReader(e.File.OpenReadStream(64 * 1024));
+            var json = await reader.ReadToEndAsync();
+            Export.GcsCredentialStore.ParseKey(json, "check");   // a service account key, or a clear message
+            newSecret = json;
+        }
+        catch (Exception ex) { error = ex.Message; newSecret = null; }
+    }
+
+    private async Task SaveAsync()
+    {
+        error = info = null;
+        try
+        {
+            var d = editing!;
+            d.Name = d.Name.Trim(); d.Bucket = d.Bucket.Trim();
+            d.Region = string.IsNullOrWhiteSpace(d.Region) ? null : d.Region.Trim();
+            d.Endpoint = string.IsNullOrWhiteSpace(d.Endpoint) ? null : d.Endpoint.Trim().TrimEnd('/');
+            d.AccessKeyId = string.IsNullOrWhiteSpace(d.AccessKeyId) ? null : d.AccessKeyId.Trim();
+            if (d.Provider != StorageProviders.S3) { d.AccessKeyId = null; d.Region = null; d.ForcePathStyle = false; }
+            if (d.Provider == StorageProviders.Gcs || d.AuthMethod == StorageAuthMethods.ConnectionString) d.Endpoint = null;
+
+            // a key stored for another authentication method does not count
+            var keepsStored = d.HasSecret && d.AuthMethod == originalAuth;
+            var hasSecret = !string.IsNullOrWhiteSpace(newSecret) || keepsStored;
+            if (StorageNames.Validate(d, hasSecret) is { } invalid) throw new InvalidOperationException(invalid);
+            if (destinations.Any(x => x.DestinationId != d.DestinationId && x.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("A destination with this name exists.");
+
+            string? protectedSecret = null;                                       // keep
+            if (d.AuthMethod == StorageAuthMethods.Default) protectedSecret = d.HasSecret ? "" : null;   // remove a key that is no longer used
+            else if (!string.IsNullOrWhiteSpace(newSecret))
+            {
+                if (!Secrets.IsConfigured) throw new InvalidOperationException("Secrets:Key is not configured, so the key cannot be stored.");
+                protectedSecret = Secrets.Protect(newSecret.Trim());
+            }
+            else if (!keepsStored && d.HasSecret) protectedSecret = "";
+
+            var id = await Repo.SaveDestinationAsync(d, protectedSecret, await Access.UserNameAsync());
+            info = $"Destination '{d.Name}' saved. Use Test to check the connection.";
+            editing = null; newSecret = null;
+            tests.Remove(id);
+            await LoadAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        error = info = null;
+        try
+        {
+            await Repo.DeleteDestinationAsync(editing!.DestinationId, await Access.UserNameAsync());
+            info = $"Destination '{editing.Name}' deleted.";
+            editing = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task TestAsync(DestinationDef d)
+    {
+        testing = d.DestinationId;
+        tests.Remove(d.DestinationId);
+        StateHasChanged();
+        try { tests[d.DestinationId] = (true, await Stores.TestAsync(d.DestinationId, CancellationToken.None)); }
+        catch (Exception ex) { tests[d.DestinationId] = (false, ex.GetBaseException().Message); }
+        finally { testing = null; }
+    }
+}

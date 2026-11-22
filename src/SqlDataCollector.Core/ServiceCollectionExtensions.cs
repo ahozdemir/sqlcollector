@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SecretProtector>();
         services.AddSingleton<GcsCredentialStore>();
         services.AddSingleton<GcsUploader>();
+        services.AddSingleton<Storage.ObjectStoreFactory>();
         services.AddSingleton<CatalogService>();
         services.AddSingleton<JobRegistrar>();
         services.TryAddSingleton<IDependentJobLauncher, HangfireDependentJobLauncher>();

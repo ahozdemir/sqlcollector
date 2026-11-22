@@ -103,6 +103,9 @@ public sealed class ExportJobDef
     public string LineEnding { get; set; } = "LF";
     public bool Utf8Bom { get; set; }
     public bool Gzip { get; set; }  // gzip the files uploaded to GCS (default: plain CSV); the local archive is always gzip
+    public int? DestinationId { get; set; }   // etl.Destination; NULL = legacy GCS bucket in Bucket (nullable: no default)
+    public string? DestinationName { get; set; }
+    public string? DestinationProvider { get; set; }
     public ExportFileFormat FileFormat { get; set; } = ExportFileFormat.Csv;
     public string ParquetCompression { get; set; } = "Snappy";   // Snappy, Zstd, Gzip, None
     public int? MaxRowsPerFile { get; set; }
@@ -294,4 +297,39 @@ public sealed class QualityResultRow
     public string? CheckType { get; set; }
     public string? ColumnName { get; set; }
     public string? Severity { get; set; }
+}
+
+public static class StorageProviders
+{
+    public const string Gcs = "Gcs", S3 = "S3", AzureBlob = "AzureBlob";
+    public static readonly string[] All = [Gcs, S3, AzureBlob];
+    public static string Describe(string p) => p switch { Gcs => "Google Cloud Storage", S3 => "Amazon S3 / S3-compatible", AzureBlob => "Azure Blob Storage", _ => p };
+}
+
+public static class StorageAuthMethods
+{
+    public const string Default = "Default", Key = "Key", ConnectionString = "ConnectionString", Sas = "Sas";
+}
+
+/// <summary>etl.Destination: an object storage target of exports. The secret is encrypted and only loaded where it is used.</summary>
+public sealed class DestinationDef
+{
+    public int DestinationId { get; set; }
+    public string Name { get; set; } = "";
+    public string Provider { get; set; } = StorageProviders.Gcs;
+    public string Bucket { get; set; } = "";
+    public string? Region { get; set; }
+    public string? Endpoint { get; set; }
+    public string AuthMethod { get; set; } = StorageAuthMethods.Default;
+    public string? AccessKeyId { get; set; }
+    /// <summary>Encrypted secret (only filled by GetDestinationAsync(includeSecret: true)).</summary>
+    public string? Secret { get; set; }
+    public bool HasSecret { get; set; }
+    public bool ForcePathStyle { get; set; }
+    public bool IsActive { get; set; } = true;
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedAtUtc { get; set; }
+
+    /// <summary>Short text for lists: "S3 · my-bucket".</summary>
+    public string Summary => $"{(Provider == StorageProviders.AzureBlob ? "Azure" : Provider)} · {Bucket}";
 }

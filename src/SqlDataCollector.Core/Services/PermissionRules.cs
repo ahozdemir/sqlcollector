@@ -10,6 +10,7 @@ public static class CheckCategory
     public const string Target = "Target";
     public const string Source = "Source";
     public const string Alerts = "Alerts";
+    public const string Destinations = "Destinations";
 }
 
 public static class CheckStatus

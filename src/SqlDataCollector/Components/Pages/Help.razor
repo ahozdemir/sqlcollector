@@ -35,11 +35,11 @@
         <section id="overview">
             <h2>Overview</h2>
             <p><b>SqlHarbor</b> (technical name SqlDataCollector: service, folders and database objects) collects data on a schedule from several SQL Server <b>sources</b> into tables on a <b>target</b> SQL Server,
-               keeps it there for a configurable <b>retention</b> period, and exports it as <b>CSV files to Google Cloud Storage</b>.
+               keeps it there for a configurable <b>retention</b> period, and exports it as <b>CSV or Parquet files to object storage</b> – Google Cloud Storage, Amazon S3 (or an S3-compatible store) or Azure Blob Storage.
                Scheduling and execution are handled by <b>Hangfire</b>.</p>
             <ul>
                 <li><b>Extract jobs</b> copy a table, a view, a query or a stored procedure result from a source database into a target table.</li>
-                <li><b>GCS export jobs</b> write the collected data as CSV files (optionally gzip, split into parts) and upload them to a bucket.</li>
+                <li><b>Export jobs</b> write the collected data as CSV or Parquet files (optionally gzip, split into parts) and upload them to a <b>destination</b> (a bucket or container).</li>
                 <li><b>Retention</b> removes data older than N days from target tables (instantly, if the table is partitioned by day).</li>
             </ul>
         </section>
@@ -49,11 +49,12 @@
             <ol>
                 <li><b>First sign-in</b> (after the installation, on the server itself): <i>Local administrator</i> asks for a new password – there is no default password.
                     The form is only offered on <code>https://localhost</code>, so nobody on the network can set it first.</li>
-                <li><b>Settings</b>: upload the Google Cloud Storage service account key; import your HTTPS certificate (.pfx/.p12 or from the Windows store) instead of the self-signed one.</li>
+                <li><b>Settings</b>: import your HTTPS certificate (.pfx/.p12 or from the Windows store) instead of the self-signed one; upload the Google Cloud Storage service account key if you export to GCS.</li>
+                <li><b>Destinations</b> (Admin): add the bucket or container the files go to (GCS, S3 / S3-compatible or Azure Blob) and click <i>Test</i>.</li>
                 <li><b>Servers</b> (Admin): add your source and target SQL Servers and click <i>Test</i>. Connections use the application's service account.</li>
                 <li><b>Permissions</b> (Admin): give AD groups a role, and tell which servers/databases Editors may use as source or target.</li>
                 <li><b>Extract Jobs → New job</b>: pick the source server, database and table(s) → <i>Preview</i> → pick the target → <i>Check target</i> → choose the load mode and retention → choose a schedule → <i>Save</i>.</li>
-                <li><b>GCS Exports → New export</b>: choose the target database, mode <i>All collected tables</i>, the bucket and a nightly schedule (e.g. 01:00).</li>
+                <li><b>Exports → New export</b>: choose the target database, mode <i>All collected tables</i>, the destination and a nightly schedule (e.g. 01:00).</li>
                 <li>Watch <b>Status</b> and <b>Run History</b>. Use <i>Run now</i> on a job page to test it immediately.</li>
             </ol>
         </section>
@@ -120,7 +121,7 @@
             <h2>Target table and schema policy</h2>
             <p><b>Target schema</b>: for a new job it is filled from the source database name (<code>ERP</code> → <code>erp</code>, <code>Sales DB</code> → <code>sales_db</code>)
                until you type your own. One schema per source avoids collisions between tables with the same name in different sources
-               (<code>ERP.dbo.Customers</code> and <code>CRM.dbo.Customers</code>), keeps GCS folders readable and lets you grant and export per source.
+               (<code>ERP.dbo.Customers</code> and <code>CRM.dbo.Customers</code>), keeps export folders readable and lets you grant and export per source.
                <code>dbo</code> works too; collector tables only ever touch tables with <code>_LoadId</code>.</p>
             <p><b>Check target</b> compares the source columns with the target table before you save:</p>
             <ul>
@@ -202,11 +203,40 @@
         </section>
 
         <section id="export">
-            <h2>GCS exports</h2>
-            <p>Export jobs write CSV files and upload them to Google Cloud Storage (resumable upload, retries, size check). Files are written to the
+            <h2>Exports</h2>
+            <p>Export jobs write CSV or Parquet files and upload them to the job's <a href="/help#destinations">destination</a> (multipart/resumable upload, retries, size check). Files are written to the
                Worker's <code>WorkDirectory</code> in day folders first. Files are uploaded as <b>plain CSV</b> (tick <i>gzip uploaded files</i> to upload
                <code>.csv.gz</code> instead). With <code>KeepLocalFiles</code> the local copies are <b>always gzip-compressed</b> after a successful upload
                (<code>…\2026-11-21\&lt;job&gt;_&lt;run&gt;\&lt;schema.table&gt;\*.csv.gz</code>) and kept for <code>LocalFileRetentionDays</code>.</p>
+        </section>
+
+        <section id="destinations">
+            <h2>Export destinations (GCS, S3, Azure Blob)</h2>
+            <p>A <b>destination</b> is where export files go: one bucket (GCS, S3) or container (Azure) plus how to sign in. Admins manage them on
+               <b>Administration → Destinations</b>; every export job picks one. Changing a destination (for example a new key or another bucket)
+               applies to all jobs that use it at their next run. A destination used by jobs cannot be deleted – deactivate it instead; a run that
+               finds its destination inactive fails with "is inactive" instead of writing somewhere unexpected.</p>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Provider</th><th>Fields</th><th>Sign-in</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Google Cloud Storage</b></td><td>Bucket</td>
+                        <td><i>Credential of the Settings page</i>: the key on Settings → Google Cloud Storage credential (or <code>Gcs:CredentialsPath</code> / Application Default Credentials, see
+                            <a href="/help#gcs">GCS settings</a>). <i>Own service account key (JSON)</i>: a key file only for this destination.</td></tr>
+                    <tr><td><b>Amazon S3 / S3-compatible</b></td><td>Bucket, region; for MinIO, Wasabi, Ceph, Cloudflare R2 etc. also the <b>endpoint</b> URL and usually <i>path-style</i></td>
+                        <td><i>Access key and secret</i>: access key id + secret access key. <i>Server's AWS identity</i>: the AWS credential chain of the Worker (environment, profile, EC2/ECS role).
+                            The IAM user needs <code>s3:PutObject</code> on the bucket (and <code>s3:GetObject</code> for the size check).</td></tr>
+                    <tr><td><b>Azure Blob Storage</b></td><td>Container, account URL (<code>https://&lt;account&gt;.blob.core.windows.net</code>)</td>
+                        <td><i>Connection string</i> (the account URL is then taken from it). <i>SAS token</i> with create/write permission. <i>Account key</i>: storage account key.
+                            <i>Managed Identity (no key)</i>: <code>DefaultAzureCredential</code> (managed identity, environment, Azure CLI) – the identity needs <i>Storage Blob Data Contributor</i>.</td></tr>
+                </tbody>
+            </table>
+            <p>Secrets (keys, connection strings, SAS tokens) are stored <b>AES-256 encrypted</b> in the metadata database with <code>Secrets:Key</code> and are never shown
+               again – leave the field empty to keep the stored value. The bucket or container must exist; the application does not create it.
+               <i>Test</i> writes a small object <code>_sdc_connection_test/&lt;machine&gt;.txt</code> from the Web server; the export Worker needs the same outbound
+               HTTPS access (<i>Check permissions</i> on the Servers page tests the TCP connection to each destination in use from every Worker).</p>
+            <p>The object name template and the manifest work the same for every provider. Files appear as <code>gs://bucket/…</code>,
+               <code>s3://bucket/…</code> or <code>https://account.blob.core.windows.net/container/…</code> in the run history.
+               After an upgrade, existing GCS jobs get a destination named <code>gcs-&lt;bucket&gt;</code> automatically and keep exporting unchanged.</p>
         </section>
 
         <section id="export-modes">
@@ -239,7 +269,8 @@
             <p>Credential, in this order: <code>Gcs:CredentialsPath</code> (a JSON key file in appsettings) → the <b>key uploaded on Settings → Google Cloud Storage
                credential</b> (stored AES-256 encrypted in the metadata database with <code>Secrets:Key</code>, so every Worker uses it; only the service account e-mail is shown)
                → Application Default Credentials (e.g. keyless Workload Identity Federation via <code>GOOGLE_APPLICATION_CREDENTIALS</code>).
-               <i>Test connection</i> gets an access token and can write a small object <code>_sdc_connection_test/&lt;machine&gt;.txt</code> to a bucket.</p>
+               <i>Test connection</i> gets an access token and can write a small object <code>_sdc_connection_test/&lt;machine&gt;.txt</code> to a bucket.
+               This chain is used by GCS <a href="/help#destinations">destinations</a> with sign-in <i>Credential of the Settings page</i>; a destination with its own key ignores it.</p>
             <table class="table table-sm table-bordered bg-white mono">
                 <thead class="table-light"><tr><th>Token</th><th>Value</th></tr></thead>
                 <tbody>
@@ -398,7 +429,7 @@
                 <li><b>Retention schedule</b> (cron, in <code>Collector:SystemTimeZone</code>), <b>run history</b>, <b>audit log</b> and <b>permission check</b> retention in days.</li>
                 <li><b>Orphaned collector tables</b>: lists tables with <code>_LoadId</code>/<code>_ExtractJobId</code> in the target databases used by jobs that no extract job writes to
                     (e.g. after a job was deleted). Retention never touches them and nothing is dropped automatically.</li>
-                <li>Not managed by the application: GCS objects (use a bucket lifecycle rule), the export Worker's local archive (<code>KeepLocalFiles</code>, <code>LocalFileRetentionDays</code>
+                <li>Not managed by the application: exported objects in GCS, S3 or Azure (use a bucket lifecycle rule or lifecycle management policy), the export Worker's local archive (<code>KeepLocalFiles</code>, <code>LocalFileRetentionDays</code>
                     in its appsettings) and Hangfire's own job history. Connections, roles/queues, folders and security settings (e.g. <code>ExportReadAsUser</code>) stay in appsettings.</li>
             </ul>
         </section>
@@ -470,7 +501,7 @@
                 </tbody>
             </table>
             <ul>
-                <li><b>Applies to – exported files only:</b> the DWH keeps the real values; every CSV written for GCS contains the masked values. Masked columns are listed in the export manifest.</li>
+                <li><b>Applies to – exported files only:</b> the DWH keeps the real values; every exported file (CSV or Parquet) contains the masked values. Masked columns are listed in the export manifest.</li>
                 <li><b>Applies to – already when collecting:</b> extract jobs write masked values into the DWH (matched against the source object and the target table), so nothing downstream ever sees the real value.
                     Hash, Partial, Email and Redact turn non-text columns into text columns of new target tables; an existing Strict table must be re-created. The watermark column is never masked.
                     Use Hash for Merge key columns (Partial could make two keys equal).</li>
@@ -589,7 +620,7 @@
         ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
         ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
-        ("export", "GCS exports"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
+        ("export", "Exports"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
@@ -601,7 +632,7 @@
         ("architecture", "Nasıl çalışır: Web ve Worker"),
         ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("extract-target", "Hedef tablo ve şema kuralı"),
         ("load-modes", "Yükleme modları"), ("partitioning", "Günlük bölümleme"), ("retention", "Saklama süresi (retention)"),
-        ("export", "GCS export'ları"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
+        ("export", "Export'lar"), ("destinations", "Export hedefleri (GCS, S3, Azure)"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
         ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"),
         ("servers", "Sunucular ve servis hesapları"), ("servers-system", "Sistem veritabanları"),
         ("settings", "Ayarlar: saklama ve temizlik"), ("https", "HTTPS sertifikası"), ("installation", "Kurulum"), ("alerts", "Alarmlar"), ("masking", "Veri koruma (maskeleme)"),

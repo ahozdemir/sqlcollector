@@ -11,8 +11,10 @@
         <li><b>Set the administrator password.</b> On the server itself open <code>https://localhost</code>, click <b>Local administrator</b> and choose a new password.
             <GuideFigure Src="guide/login.png" Caption="Sign-in: corporate users sign in with Windows (AD); the local administrator is for the first setup." />
         </li>
-        <li><b>Upload the Google Cloud key.</b> In <b>Settings → Google Cloud Storage credential</b> choose the service account's JSON key and click <b>Save key</b>,
-            then enter a bucket name and click <b>Test connection</b>.
+        <li><b>Tell where the files go.</b> In <b>Administration → Destinations</b> click <b>+ New destination</b>, choose the provider – <b>Google Cloud Storage</b>,
+            <b>Amazon S3 / S3-compatible</b> (MinIO, Wasabi, Ceph …) or <b>Azure Blob Storage</b> – enter the bucket or container and the key, then click <b>Test</b>.
+            <GuideFigure Src="guide/destinations.png" Caption="Destinations: one row per bucket or container; Test writes a small test object with the stored key." />
+            For GCS you can instead upload the service account key once in <b>Settings → Google Cloud Storage credential</b> and use it for every GCS destination.
             <GuideFigure Src="guide/settings-gcs.png" Caption="GCS key on the Settings page: stored encrypted; only the service account's name is shown." />
         </li>
         <li><b>Import the corporate HTTPS certificate</b> (<b>Settings → HTTPS certificate</b>). Browsers warn about the temporary certificate of the installation.</li>
@@ -23,7 +25,7 @@
     <div class="alert alert-info"><b>Recommended.</b> Give roles to AD groups (e.g. <i>DWH-Editors</i>) rather than to individuals: access follows group membership automatically.</div>
     <div class="alert alert-warning"><b>Watch out.</b> The local administrator is for the first setup and emergencies only; keep its password safe. Everyday work uses Windows accounts.</div>
     <p><b>How do I check?</b> The <b>Status</b> page shows at least one worker online, and the permission check has no red (<i>Missing</i>) rows.</p>
-    <p class="small">Reference: <a href="/help#installation">Installation</a> · <a href="/help#https">HTTPS certificate</a> · <a href="/help#gcs">GCS settings</a> · <a href="/help#servers">Servers and service accounts</a> · <a href="/help#permission-check">Permission check</a></p>
+    <p class="small">Reference: <a href="/help#installation">Installation</a> · <a href="/help#https">HTTPS certificate</a> · <a href="/help#destinations">Export destinations</a> · <a href="/help#servers">Servers and service accounts</a> · <a href="/help#permission-check">Permission check</a></p>
 </section>
 
 <section id="nightly-table">
@@ -62,7 +64,7 @@
     <h2>Large, constantly changing tables</h2>
     <p class="guide-meta">Who: Editor · Example: order or customer tables with millions of rows</p>
     <p><b>Why?</b> Reading a large table completely every night loads the source and inflates the files. With the right mode only changed rows are read
-       and only the changes go to GCS (25 rows when 25 of 5,000 customers changed).</p>
+       and only the changes go to the cloud (25 rows when 25 of 5,000 customers changed).</p>
     <h3>Which mode?</h3>
     <table class="table table-sm table-bordered bg-white">
         <thead class="table-light"><tr><th>Need</th><th>Mode</th></tr></thead>
@@ -89,14 +91,15 @@
 </section>
 
 <section id="nightly-export">
-    <h2>Send the collected data to GCS every night</h2>
+    <h2>Send the collected data to the cloud every night</h2>
     <p class="guide-meta">Who: Editor · Time: 5 minutes</p>
     <p><b>Why?</b> Analytics teams in the cloud (BigQuery, Databricks) expect the data every day, regularly and complete. One "All collected tables" export covers every collected
        table of the DWH and picks up new tables automatically.</p>
     <h3>Steps</h3>
     <ol>
-        <li><b>GCS Exports → + New export</b>. Choose the DWH server and database and the mode <b>All collected tables</b>.</li>
-        <li>Enter the <b>Bucket</b>. The object name template can stay as it is: files are sorted into table and day folders.</li>
+        <li><b>Exports → + New export</b>. Choose the DWH server and database and the mode <b>All collected tables</b>.</li>
+        <li>In <b>2 · Destination</b> choose where the files go (GCS, S3 or Azure). If the list is empty, an Admin adds one on <b>Destinations</b> first.
+            The object name template can stay as it is: files are sorted into table and day folders.</li>
         <li><b>Choose the file format:</b> <b>CSV</b> for Excel and general use, <b>Parquet</b> for BigQuery, Spark and pandas (about 7× smaller, typed).
             <GuideFigure Src="guide/export-format.png" Caption="3 · File format: CSV settings (delimiter, quoting, NULL) or Parquet compression." />
         </li>
@@ -106,10 +109,10 @@
         </li>
         <li><b>Save</b>. Try it with <b>Run now</b> on the job page.</li>
     </ol>
-    <div class="alert alert-info"><b>Recommended.</b> Add a <i>lifecycle</i> rule to the bucket (e.g. 90 days) to remove old files; SqlHarbor never deletes files in the cloud.</div>
+    <div class="alert alert-info"><b>Recommended.</b> Add a <i>lifecycle</i> rule to the bucket or container (e.g. 90 days) to remove old files; SqlHarbor never deletes files in the cloud.</div>
     <div class="alert alert-warning"><b>Watch out.</b> Read the <a href="/guide#personal-data">personal data</a> scenario before sending. "All collected tables" also sends every newly added table automatically.</div>
-    <p><b>How do I check?</b> The export row in <b>Run history</b> shows tables, rows, files and the GCS addresses of the files.</p>
-    <p class="small">Reference: <a href="/help#export-modes">Export modes</a> · <a href="/help#csv-format">CSV and Parquet</a> · <a href="/help#gcs">GCS settings and object names</a> · <a href="/help#dependencies">Job dependencies</a></p>
+    <p><b>How do I check?</b> The export row in <b>Run history</b> shows tables, rows, files and the addresses of the files (<code>gs://</code>, <code>s3://</code> or <code>https://…blob.core.windows.net</code>).</p>
+    <p class="small">Reference: <a href="/help#export-modes">Export modes</a> · <a href="/help#csv-format">CSV and Parquet</a> · <a href="/help#destinations">Export destinations</a> · <a href="/help#gcs">Object names</a> · <a href="/help#dependencies">Job dependencies</a></p>
 </section>
 
 <section id="personal-data">

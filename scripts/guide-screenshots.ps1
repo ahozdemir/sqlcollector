@@ -29,12 +29,13 @@ $shots = @(
     @{ Name = "extract-trigger";  Page = "/extract/3";      H = 2400; X = 834; Y = 713; W = 568;  Ht = 368; Auth = $true },
     @{ Name = "extract-quality";  Page = "/extract/3";      H = 2400; X = 834; Y = 1085; W = 568; Ht = 572; Auth = $true },
     @{ Name = "merge-load";       Page = "/extract/9";      H = 2400; X = 834; Y = 438; W = 568;  Ht = 489; Auth = $true },
-    @{ Name = "export-format";    Page = "/export/1";       H = 1600; X = 834; Y = 338; W = 568;  Ht = 351; Auth = $true },
-    @{ Name = "export-trigger";   Page = "/export/1";       H = 1600; X = 834; Y = 692; W = 568;  Ht = 614; Auth = $true },
+    @{ Name = "export-format";    Page = "/export/1";       H = 1600; X = 834; Y = 339; W = 568;  Ht = 351; Auth = $true },
+    @{ Name = "export-trigger";   Page = "/export/1";       H = 1600; X = 834; Y = 694; W = 568;  Ht = 614; Auth = $true },
     @{ Name = "privacy";          Page = "/admin/privacy";  H = 1000; X = 256; Y = 64;  W = 1168; Ht = 500; Auth = $true },
     @{ Name = "quality-page";     Page = "/quality";        H = 1000; X = 256; Y = 64;  W = 1168; Ht = 480; Auth = $true },
     @{ Name = "runs";             Page = "/runs";           H = 1000; X = 256; Y = 64;  W = 1168; Ht = 560; Auth = $true },
     @{ Name = "alerts";           Page = "/admin/alerts";   H = 1000; X = 256; Y = 64;  W = 1168; Ht = 560; Auth = $true },
+    @{ Name = "destinations";     Page = "/admin/destinations"; H = 1000; X = 256; Y = 64; W = 1168; Ht = 400; Auth = $true },
     @{ Name = "settings-gcs";     Page = "/admin/settings"; H = 1400; X = 262; Y = 728; W = 1141; Ht = 261; Auth = $true }
 )
 

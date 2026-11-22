@@ -8,6 +8,7 @@
                                           + target DB (SdcDwh), Windows authentication (Integrated Security)
     * Docker: src-erp (localhost,14331), src-crm (localhost,14332) demo sources filled with test data
     * Docker: fakegcs (http://localhost:4443) Google Cloud Storage emulator, bucket "test-bucket"
+    * Docker: s3mock (http://localhost:9090, S3-compatible, bucket dwh-exports) and azurite (Azure Blob emulator, http://127.0.0.1:10000)
     * The app runs on the host: dotnet run --project src/SqlDataCollector --launch-profile LocalTest -> http://localhost:5080
 
 .EXAMPLE
@@ -110,10 +111,10 @@ function Wait-Healthy([string[]]$Containers, [int]$TimeoutSec = 240) {
 }
 
 function Start-Sources([switch]$Reseed) {
-    Write-Step 'Starting Docker demo sources (src-erp, src-crm), the GCS emulator (fakegcs) and the SMTP sink (mailpit)'
+    Write-Step 'Starting Docker demo sources (src-erp, src-crm), the storage emulators (fakegcs, s3mock, azurite) and the SMTP sink (mailpit)'
     $env:RESEED = if ($Reseed) { '1' } else { '0' }
     try {
-        Invoke-Compose @('up', '-d', 'src-erp', 'src-crm', 'fakegcs', 'mailpit')
+        Invoke-Compose @('up', '-d', 'src-erp', 'src-crm', 'fakegcs', 's3mock', 'azurite', 'mailpit')
         Wait-Healthy @('sqlcollector-src-erp-1', 'sqlcollector-src-crm-1')
         Write-Step 'Seeding demo data (first run takes about a minute)'
         Invoke-Compose @('up', '--no-deps', '--force-recreate', 'src-seed')
@@ -121,6 +122,31 @@ function Start-Sources([switch]$Reseed) {
     finally { Remove-Item Env:RESEED -ErrorAction SilentlyContinue }
     $code = (& docker inspect -f '{{.State.ExitCode}}' sqlcollector-src-seed-1)
     if ($code -ne '0') { throw "src-seed failed (exit $code). See: docker logs sqlcollector-src-seed-1" }
+    New-AzuriteContainer 'exports'
+}
+
+function New-AzuriteContainer([string]$Container) {
+    # Creates a blob container in the Azurite emulator (shared key of the public development account, not a secret).
+    $account = 'devstoreaccount1'
+    $key = [Convert]::FromBase64String('Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==')
+    $date = [DateTime]::UtcNow.ToString('R')
+    $version = '2021-08-06'
+    $toSign = "PUT`n`n`n`n`n`n`n`n`n`n`n`nx-ms-date:$date`nx-ms-version:$version`n/$account/$account/$Container`nrestype:container"
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList (, $key)
+    $signature = [Convert]::ToBase64String($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($toSign)))
+    $headers = @{ 'x-ms-date' = $date; 'x-ms-version' = $version; 'Authorization' = "SharedKey ${account}:$signature" }
+    for ($i = 0; $i -lt 20; $i++) {
+        try {
+            Invoke-WebRequest -Method Put -Uri "http://127.0.0.1:10000/$account/$Container`?restype=container" -Headers $headers -UseBasicParsing | Out-Null
+            Write-Step "Azurite container '$Container' created"; return
+        }
+        catch {
+            $status = $_.Exception.Response.StatusCode.value__
+            if ($status -eq 409) { return }   # already exists
+            if ($i -eq 19) { throw "Could not create Azurite container '$Container': $($_.Exception.Message)" }
+            Start-Sleep -Seconds 1
+        }
+    }
 }
 
 function Invoke-RunJob([string[]]$JobArgs) {
