@@ -130,6 +130,82 @@ if (args.Length > 0 && args[0] is "create-cert" or "db-script" or "db-install" o
     }
 }
 
+// ---- Job packages: export / import job definitions as JSON (environment promotion, version control) ----
+//   SqlDataCollector.exe jobs-export <file> [--extract 1,2] [--export 3] [--no-upstreams]      (default: all jobs)
+//   SqlDataCollector.exe jobs-import <file> [--dry-run] [--update-existing] [--keep-active]
+//                                           [--map-server FILE=HERE]... [--map-destination FILE=HERE]...
+//   The import is validated first and changes nothing when there is an error. New jobs are inactive unless --keep-active;
+//   the Workers' sync job registers the schedules of active jobs in Hangfire.
+if (args.Length > 1 && args[0] is "jobs-export" or "jobs-import")
+{
+    var cli = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+    {
+        ContentRootPath = AppContext.BaseDirectory,
+        EnvironmentName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? Environments.Production
+    });
+    cli.Services.AddSqlDataCollectorCore(cli.Configuration);
+    using var host = cli.Build();
+    var transfer = host.Services.GetRequiredService<JobTransferService>();
+    var cliUser = $"cli:{Environment.UserName}";
+    var file = Path.GetFullPath(args[1]);
+    List<string> Values(string name) => args.Select((a, i) => (a, i)).Where(x => x.a == "--" + name && x.i + 1 < args.Length).Select(x => args[x.i + 1]).ToList();
+    List<int>? Ids(string name) => Values(name) is { Count: > 0 } v
+        ? v.SelectMany(s => s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).Select(int.Parse).ToList() : null;
+    try
+    {
+        if (args[0] == "jobs-export")
+        {
+            var extractIds = Ids("extract");
+            var exportIds = Ids("export");
+            var package = await transfer.ExportAsync(extractIds ?? (exportIds is null ? null : []), exportIds ?? (extractIds is null ? null : []),
+                !args.Contains("--no-upstreams"), cliUser);
+            await File.WriteAllTextAsync(file, JobPackageJson.Serialize(package));
+            Console.WriteLine($"Wrote {package.ExtractJobs.Count} extract and {package.ExportJobs.Count} export job(s) to {file}");
+            return 0;
+        }
+
+        var pkg = JobPackageJson.Deserialize(await File.ReadAllTextAsync(file));
+        var importOptions = new JobImportOptions
+        {
+            ExistingJobs = args.Contains("--update-existing") ? ExistingJobAction.Update : ExistingJobAction.Skip,
+            NewJobsInactive = !args.Contains("--keep-active")
+        };
+        var repo = host.Services.GetRequiredService<MetadataRepository>();
+        var allServers = await repo.GetServersAsync();
+        var allDestinations = await repo.GetDestinationsAsync();
+        foreach (var m in Values("map-server"))
+        {
+            var (from, to) = m.Split('=', 2) is [var f, var t] ? (f.Trim(), t.Trim()) : throw new ArgumentException($"--map-server needs FILE=HERE: '{m}'");
+            importOptions.ServerMap[from] = allServers.FirstOrDefault(s => s.Name.Equals(to, StringComparison.OrdinalIgnoreCase))?.SqlServerId
+                ?? throw new ArgumentException($"Server '{to}' does not exist here.");
+        }
+        foreach (var m in Values("map-destination"))
+        {
+            var (from, to) = m.Split('=', 2) is [var f, var t] ? (f.Trim(), t.Trim()) : throw new ArgumentException($"--map-destination needs FILE=HERE: '{m}'");
+            importOptions.DestinationMap[from] = allDestinations.FirstOrDefault(d => d.Name.Equals(to, StringComparison.OrdinalIgnoreCase))?.DestinationId
+                ?? throw new ArgumentException($"Destination '{to}' does not exist here.");
+        }
+
+        var access = new FullJobImportAccess(cliUser);
+        var importPlan = await transfer.PlanAsync(pkg, importOptions, access);
+        foreach (var e in importPlan.Errors) Console.WriteLine($"ERROR  {e}");
+        foreach (var i in importPlan.Items)
+            Console.WriteLine($"{i.Action.ToString().ToUpperInvariant(),-7}{i.Kind,-8}{i.Name}{(i.Messages.Count > 0 ? "  – " + string.Join(" ", i.Messages) : "")}");
+        if (importPlan.MissingServers.Count > 0) Console.WriteLine($"Unknown servers (use --map-server FILE=HERE): {string.Join(", ", importPlan.MissingServers)}");
+        if (importPlan.MissingDestinations.Count > 0) Console.WriteLine($"Unknown destinations (use --map-destination FILE=HERE): {string.Join(", ", importPlan.MissingDestinations)}");
+        if (importPlan.HasErrors) { Console.WriteLine("Nothing was imported."); return 1; }
+        if (args.Contains("--dry-run")) { Console.WriteLine("Dry run: nothing was imported."); return 0; }
+        var result = await transfer.ApplyAsync(pkg, importOptions, access);
+        Console.WriteLine($"Imported: {result.Created} created, {result.Updated} overwritten, {result.Skipped} left unchanged.");
+        return 0;
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or FormatException or IOException or InvalidOperationException)
+    {
+        Console.Error.WriteLine($"{args[0]} failed: {ex.Message}");
+        return 1;
+    }
+}
+
 // ---- Helper command: run jobs in-process, without Hangfire (local testing / debugging) ----
 //   SqlDataCollector.exe run-job extract <id|all>     SqlDataCollector.exe run-job export <id|all>
 //   Uses the normal configuration (appsettings.json + appsettings.{ASPNETCORE_ENVIRONMENT}.json + environment).

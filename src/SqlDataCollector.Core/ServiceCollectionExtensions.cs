@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DependencyService>();
         services.AddSingleton<PermissionChecker>();
         services.AddSingleton<SystemSettingsService>();
+        services.AddSingleton<JobTransferService>();
         services.Configure<Alerts.AlertOptions>(configuration.GetSection(Alerts.AlertOptions.Section));
         services.AddSingleton<Alerts.AlertSender>();
         services.AddSingleton<Alerts.AlertDispatcher>();

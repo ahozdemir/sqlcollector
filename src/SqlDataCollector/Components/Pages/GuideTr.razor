@@ -195,6 +195,30 @@
     <p class="small">Başvuru: <a href="/help#roles">Roller ve yetkiler</a> · <a href="/help#permission-check">İzin kontrolü</a></p>
 </section>
 
+<section id="move-jobs">
+    <h2>Job'ları testten canlıya taşımak</h2>
+    <p class="guide-meta">Kim: Editor (indirmek için Viewer da) · Süre: 5 dakika</p>
+    <p><b>Neden?</b> Job'ları önce test kurulumunda hazırlayıp denemek en doğrusu. Canlıda hepsini yeniden yazmak hem yavaş hem de hataya açık: tek bir yanlış filtre
+       veya anahtar kolon verinin yanlış gelmesine yeter. Job dosyası bütün ayarları, kalite kontrollerini ve bağımlılıkları tek seferde taşır.</p>
+    <h3>Adımlar</h3>
+    <ol>
+        <li>Test kurulumunda <b>Import / export</b> sayfasını açın, job'ları işaretleyin ve <b>Also include the jobs they run after</b> açık kalsın. <b>Download JSON</b>'a tıklayın.
+            <GuideFigure Src="guide/transfer.png" Caption="Import / export: job'ları işaretleyip tek bir JSON dosyası olarak indirin." />
+        </li>
+        <li>Canlı kurulumda aynı sayfayı açın ve dosyayı <b>Import</b> bölümünden seçin. Henüz hiçbir şey kaydedilmez: her job için <b>create</b>, <b>overwrite</b>,
+            <b>unchanged</b> veya <b>error</b> yazan bir satır görünür.</li>
+        <li><b>Adları eşleyin:</b> aynı adlı sunucu ve hedefler kendiliğinden bulunur. Diğerleri için canlıdaki karşılığını seçin
+            (ör. <code>TEST-ERP</code> → <code>PROD-ERP</code>, <code>test-bucket</code> → <code>prod-bucket</code>).</li>
+        <li>Hiçbir satırda hata kalmayınca <b>Import</b>'a tıklayın. Yeni job'lar <b>pasif</b> oluşturulur: açıp kaynağı ve hedefi bir kez daha kontrol edin, sonra <b>Active</b>'i işaretleyin.</li>
+    </ol>
+    <div class="alert alert-info"><b>Öneri.</b> Job dosyasını git'te saklayın. İki dosya arasındaki fark tam olarak neyin değiştiğini gösterir; komut satırı
+        (<code>jobs-export</code> / <code>jobs-import --dry-run</code>) da kurulum hattına eklenebilir.</div>
+    <div class="alert alert-warning"><b>Dikkat.</b> <b>overwrite with the file</b> seçeneği canlıda zaten çalışan job'ların ayarlarını değiştirir (aktif/pasif durumu ve watermark'ı korunur).
+        Import'a basmadan önce <b>overwrite</b> yazan satırlara bakın.</div>
+    <p><b>Nasıl kontrol ederim?</b> Audit log, içe aktarmayı oluşturulan, üzerine yazılan ve dokunulmayan job'larla birlikte listeler. Job'lar <b>Extract jobs</b> ve <b>Exports</b> listelerinde <i>inactive</i> olarak görünür.</p>
+    <p class="small">Başvuru: <a href="/help#transfer">Job'ları dışa / içe aktarmak</a> · <a href="/help#dependencies">Job bağımlılıkları</a> · <a href="/help#roles">Roller ve yetkiler</a></p>
+</section>
+
 <section id="when-it-fails">
     <h2>Bir job hata verdi: ne yapmalı?</h2>
     <p class="guide-meta">Kim: Editor, Admin</p>

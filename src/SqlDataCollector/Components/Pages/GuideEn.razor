@@ -195,6 +195,30 @@
     <p class="small">Reference: <a href="/help#roles">Roles and permissions</a> · <a href="/help#permission-check">Permission check</a></p>
 </section>
 
+<section id="move-jobs">
+    <h2>Move jobs from test to production</h2>
+    <p class="guide-meta">Who: Editor (download: also Viewer) · Time: 5 minutes</p>
+    <p><b>Why?</b> Jobs are best built and tried on a test installation. Typing them again in production is slow and error-prone: one wrong filter or key column and the
+       data is wrong. A job file carries every setting, the quality checks and the dependencies in one go.</p>
+    <h3>Steps</h3>
+    <ol>
+        <li>On the test installation open <b>Import / export</b>, tick the jobs and keep <b>Also include the jobs they run after</b> on. Click <b>Download JSON</b>.
+            <GuideFigure Src="guide/transfer.png" Caption="Import / export: tick the jobs and download them as one JSON file." />
+        </li>
+        <li>On the production installation open the same page and choose the file under <b>Import</b>. Nothing is saved yet: every job gets a row with <i>create</i>, <i>overwrite</i>,
+            <i>unchanged</i> or <i>error</i>.</li>
+        <li><b>Map the names:</b> servers and destinations with the same name are found automatically. For the others choose the production counterpart
+            (e.g. <code>TEST-ERP</code> → <code>PROD-ERP</code>, <code>test-bucket</code> → <code>prod-bucket</code>).</li>
+        <li>When no row shows an error, click <b>Import</b>. New jobs are created <b>inactive</b>: open them, check the source and target once more and tick <b>Active</b>.</li>
+    </ol>
+    <div class="alert alert-info"><b>Recommended.</b> Keep the job file in version control (git). The difference between two files shows exactly what changed, and the
+        command line (<code>jobs-export</code> / <code>jobs-import --dry-run</code>) fits into a deployment pipeline.</div>
+    <div class="alert alert-warning"><b>Watch out.</b> <i>Overwrite with the file</i> replaces the settings of jobs that already run in production (they keep their active state and watermark).
+        Check the rows marked <i>overwrite</i> before you click Import.</div>
+    <p><b>How do I check?</b> The Audit log lists the import with the created, overwritten and unchanged jobs; the jobs appear in <b>Extract jobs</b> and <b>Exports</b> as <i>inactive</i>.</p>
+    <p class="small">Reference: <a href="/help#transfer">Import and export jobs</a> · <a href="/help#dependencies">Job dependencies</a> · <a href="/help#roles">Roles and permissions</a></p>
+</section>
+
 <section id="when-it-fails">
     <h2>A job failed: what now?</h2>
     <p class="guide-meta">Who: Editor, Admin</p>

@@ -391,6 +391,32 @@
                Rows deleted in the source after the read still show as a difference; use a small tolerance for such tables, or rely on the integrity checks above.</p>
         </section>
 
+        <section id="transfer">
+            <h2>Import and export jobs</h2>
+            <p>On <a href="/transfer">Jobs → Import / export</a> job definitions are saved as a JSON file and loaded into another installation – typically from test to production,
+               but also as a backup or to keep the definitions in version control. Viewers can download; Editors and Admins can import.</p>
+            <ul>
+                <li><b>What the file holds:</b> all settings of the selected extract and export jobs, the quality checks of extract jobs and the
+                    <a href="/help#dependencies">dependencies</a>. <i>Also include the jobs they run after</i> adds the upstream jobs automatically.
+                    Servers, destinations and upstream jobs are referenced by <b>name</b> (ids differ between installations). Keys, passwords, watermarks, run history and
+                    collected data are <b>never</b> included.</li>
+                <li><b>Import is checked first:</b> after choosing the file the page shows one row per job – <i>create</i>, <i>overwrite</i>, <i>unchanged</i> or <i>error</i> – and
+                    changes nothing until you click <b>Import</b>. The button stays disabled while any row has an error; an error-free plan is saved completely.</li>
+                <li><b>Servers and destinations</b> with the same name are used automatically. Names that do not exist here are listed with a dropdown: map e.g. <code>TEST-ERP</code> to <code>PROD-ERP</code>.</li>
+                <li><b>Jobs that already exist</b> (same name) are left unchanged by default. <i>Overwrite with the file</i> replaces their settings, quality checks and dependencies;
+                    an existing job keeps its active/inactive state and its watermark, so a running production job is not switched off or reloaded.</li>
+                <li><b>New jobs are created inactive</b> by default, so nothing runs before you have looked at them: open the job and tick <i>Active</i>.</li>
+                <li>The same checks as on <i>Save</i> apply: your server and database permissions, the retention policy, Merge / rebuild target tables,
+                    cron expressions, and dependencies (an upstream must be in the file or exist here; no loops). Imports and downloads are written to the Audit log.</li>
+            </ul>
+            <p><b>Command line</b> (e.g. in a deployment pipeline, with the configuration of the installation):</p>
+            <pre class="mono small bg-light p-2 border rounded">SqlDataCollector.exe jobs-export jobs.json [--extract 1,2] [--export 3] [--no-upstreams]
+SqlDataCollector.exe jobs-import jobs.json --dry-run --map-server TEST-ERP=PROD-ERP --map-destination test-bucket=prod-bucket
+SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [--map-server FILE=HERE]... [--map-destination FILE=HERE]...</pre>
+            <p class="small">Without job ids <code>jobs-export</code> writes all jobs. <code>jobs-import</code> prints the plan, returns exit code 1 and changes nothing when there is an error;
+               <code>--dry-run</code> only prints the plan. The command line runs with the service account's rights (like an Admin); the Workers' sync job registers the schedules of active jobs.</p>
+        </section>
+
         <section id="servers">
             <h2>Servers and service accounts</h2>
             <ul>
@@ -621,7 +647,7 @@
         ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "Exports"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
-        ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
+        ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("transfer", "Import and export jobs"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("troubleshooting", "Statuses and troubleshooting")
     ];
@@ -633,7 +659,7 @@
         ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("extract-target", "Hedef tablo ve şema kuralı"),
         ("load-modes", "Yükleme modları"), ("partitioning", "Günlük bölümleme"), ("retention", "Saklama süresi (retention)"),
         ("export", "Export'lar"), ("destinations", "Export hedefleri (GCS, S3, Azure)"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
-        ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"),
+        ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"), ("transfer", "Job'ları dışa / içe aktarmak"),
         ("servers", "Sunucular ve servis hesapları"), ("servers-system", "Sistem veritabanları"),
         ("settings", "Ayarlar: saklama ve temizlik"), ("https", "HTTPS sertifikası"), ("installation", "Kurulum"), ("alerts", "Alarmlar"), ("masking", "Veri koruma (maskeleme)"),
         ("permission-check", "İzin kontrolü"), ("roles", "Roller ve yetkiler"), ("hangfire", "Hangfire paneli"), ("troubleshooting", "Durumlar ve sorun giderme")

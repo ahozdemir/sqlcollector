@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.Options;
 using SqlDataCollector.Infrastructure;
 using SqlDataCollector.Models;
+using SqlDataCollector.Services;
 
 namespace SqlDataCollector.Security;
 
@@ -330,4 +331,15 @@ public sealed class AccessService(AuthenticationStateProvider auth, MetadataRepo
         "Target" => p.CanTarget,
         _ => p.CanSource || p.CanTarget
     };
+
+    /// <summary>The signed-in user's rights for a job import (same checks as the job editors).</summary>
+    public async Task<IJobImportAccess> ImportAccessAsync() => new WebJobImportAccess(this, await UserNameAsync());
+
+    private sealed class WebJobImportAccess(AccessService access, string userName) : IJobImportAccess
+    {
+        public string UserName => userName;
+        public Task<bool> CanEditAsync() => access.CanEditAsync();
+        public Task<bool> IsAdminAsync() => access.IsAdminAsync();
+        public Task<bool> CanUseAsync(int serverId, string database, string usage) => access.CanUseAsync(serverId, database, usage);
+    }
 }

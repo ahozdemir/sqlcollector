@@ -4,12 +4,13 @@
   opens each page at 1440 px and the region of interest is cropped – never the top bar (user name), the menu footer
   (machine name) or server names, because the images are part of the repository.
 
-  Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/guide-screenshots.ps1 [-BaseUrl http://localhost:5080]
+  Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/guide-screenshots.ps1 [-BaseUrl http://localhost:5080] [-Only transfer,runs]
   The regions are CSS pixels at 1440 px width (measured with the browser's getBoundingClientRect); adjust them when a page layout changes.
 #>
 param(
     [string]$BaseUrl = "http://localhost:5080",
-    [string]$Chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+    [string]$Chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe",
+    [string[]]$Only = @()   # names of the screenshots to refresh (default: all)
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
@@ -36,9 +37,11 @@ $shots = @(
     @{ Name = "runs";             Page = "/runs";           H = 1000; X = 256; Y = 64;  W = 1168; Ht = 560; Auth = $true },
     @{ Name = "alerts";           Page = "/admin/alerts";   H = 1000; X = 256; Y = 64;  W = 1168; Ht = 560; Auth = $true },
     @{ Name = "destinations";     Page = "/admin/destinations"; H = 1000; X = 256; Y = 64; W = 1168; Ht = 400; Auth = $true },
+    @{ Name = "transfer";         Page = "/transfer";       H = 1000; X = 256; Y = 64;  W = 1168; Ht = 900; Auth = $true },
     @{ Name = "settings-gcs";     Page = "/admin/settings"; H = 1400; X = 262; Y = 728; W = 1141; Ht = 261; Auth = $true }
 )
 
+if ($Only.Count -gt 0) { $shots = @($shots | Where-Object { $Only -contains $_.Name }) }
 foreach ($s in $shots) {
     $raw = Join-Path $work "$($s.Name)-raw.png"
     Remove-Item $raw -ErrorAction SilentlyContinue

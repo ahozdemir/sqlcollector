@@ -83,6 +83,15 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - Failed loads are rolled back; loads interrupted by a crash are cleaned up by the next sync
 - decimal(38,x) values are transferred exactly (`SqlDecimal`)
 
+**Import / export of job definitions** (*Jobs → Import / export*, CLI `jobs-export` / `jobs-import`)
+- Selected extract and export jobs (optionally with the jobs they run after), their quality checks and dependencies as one
+  portable JSON file – environment promotion (test → production), backups, version control. Servers, destinations and
+  upstream jobs are referenced by name; no keys, watermarks or run history.
+- The import is planned first (create / overwrite / unchanged / error per job) with the same checks as *Save* –
+  permissions, retention policy, Merge/rebuild target tables, cron, dependency loops – and saves nothing while there is an
+  error. Unknown server and destination names are mapped; existing jobs are skipped or overwritten (keeping their active
+  state and watermark); new jobs are created inactive by default.
+
 **Export (Google Cloud Storage, Amazon S3 / S3-compatible, Azure Blob Storage)**
 - **Destinations** (Admin → *Destinations*): named targets per provider – GCS (Settings credential or own JSON key), Amazon S3
   (access key or the server's AWS identity), S3-compatible storage such as MinIO, Wasabi or Ceph (endpoint, path-style URLs)
@@ -321,6 +330,8 @@ SqlDataCollector.exe hangfire-install-script [schema] [accounts…] > x.sql  # D
 SqlDataCollector.exe hangfire-install "<connection string>" [schema]       # install Hangfire tables directly
 SqlDataCollector.exe metadata-install "<connection string>"                # install/upgrade the etl.* schema
 SqlDataCollector.exe run-job extract|export <id|all>                       # run job(s) in-process now (exit code 0 = OK)
+SqlDataCollector.exe jobs-export jobs.json [--extract 1,2] [--export 3] [--no-upstreams]   # job definitions -> JSON (default: all jobs)
+SqlDataCollector.exe jobs-import jobs.json [--dry-run] [--update-existing] [--keep-active] [--map-server FILE=HERE]... [--map-destination FILE=HERE]...
 SqlDataCollector.exe create-cert --host sdc.corp.local [--dir <folder>]      # self-signed HTTPS certificate (installer)
 SqlDataCollector.exe db-script --meta M --dwh D [--account DOMAIN\svc] [--central --hangfire-db H] --out <folder>   # DBA scripts
 SqlDataCollector.exe db-install --server S --meta M --dwh D [--account DOMAIN\svc] [--trust-server-certificate]   # run them (current Windows account)

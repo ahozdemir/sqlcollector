@@ -716,19 +716,8 @@
     /// <summary>Rebuild replaces the whole table: no other job may write to the same target table (checked again at run time).</summary>
     private async Task EnsureRebuildTargetIsFreeAsync(ExtractJobDef j)
     {
-        var all = await Repo.GetExtractJobsAsync();
-        bool Same(ExtractJobDef o) => o.ExtractJobId != j.ExtractJobId && o.TargetServerId == j.TargetServerId
-            && o.TargetDatabase.Equals(j.TargetDatabase, StringComparison.OrdinalIgnoreCase)
-            && o.TargetSchema.Equals(j.TargetSchema, StringComparison.OrdinalIgnoreCase)
-            && o.TargetTable.Equals(j.TargetTable, StringComparison.OrdinalIgnoreCase);
-        var others = all.Where(Same).ToList();
-        var what = j.LoadMode == LoadMode.Merge ? "Merge" : "Replace with rebuild";
-        if ((j.ReplaceRebuild || j.LoadMode == LoadMode.Merge) && others.Count > 0)
-            throw new InvalidOperationException($"{what} needs a target table that only this job writes to; also written by: {string.Join(", ", others.Select(o => o.Name))}.");
-        if (others.FirstOrDefault(o => o.LoadMode == LoadMode.Replace && o.ReplaceRebuild) is { } rebuilder)
-            throw new InvalidOperationException($"Job '{rebuilder.Name}' rebuilds this target table on every run; choose another target table.");
-        if (others.FirstOrDefault(o => o.LoadMode == LoadMode.Merge) is { } merger)
-            throw new InvalidOperationException($"Job '{merger.Name}' merges into this target table (one row per key); choose another target table.");
+        if (JobDefinitionRules.TargetConflict(j, await Repo.GetExtractJobsAsync()) is { } conflict)
+            throw new InvalidOperationException(conflict);
     }
 
     private void Validate()

@@ -336,6 +336,33 @@
        Bunu önlemek için <b>cutoff column</b> olarak artan bir ID veya kayıt zamanı kolonu verin: yalnızca okunan en büyük değere kadar olan satırlar sayılır.</p>
 </section>
 
+<section id="transfer">
+    <h2>Job'ları dışa / içe aktarmak</h2>
+    <p><a href="/transfer">Jobs → Import / export</a> sayfasında job tanımları bir JSON dosyasına kaydedilir ve başka bir kuruluma yüklenir.
+       En sık kullanım: test ortamında hazırlanan job'ları canlıya taşımak. Yedek almak veya tanımları git'te saklamak için de kullanılabilir.
+       Viewer dosyayı indirebilir; içe aktarma Editor ve Admin içindir.</p>
+    <ul>
+        <li><b>Dosyada ne var:</b> seçilen extract ve export job'larının tüm ayarları, extract job'larının kalite kontrolleri ve
+            <a href="/help#dependencies">bağımlılıklar</a>. <b>Also include the jobs they run after</b> işaretliyse beklenen job'lar da kendiliğinden eklenir.
+            Sunucu, hedef (destination) ve beklenen job'lar <b>adıyla</b> yazılır; çünkü numaraları her kurulumda farklıdır.
+            Anahtar, şifre, watermark, çalışma geçmişi ve toplanmış veri dosyaya <b>hiçbir zaman</b> girmez.</li>
+        <li><b>Önce kontrol, sonra kayıt:</b> dosyayı seçince her job için bir satır görünür: <b>create</b> (oluşturulacak), <b>overwrite</b> (üzerine yazılacak),
+            <b>unchanged</b> (dokunulmayacak) veya <b>error</b>. <b>Import</b> düğmesine basılana kadar hiçbir şey değişmez. Bir satırda hata varken düğme kapalı kalır.</li>
+        <li><b>Sunucular ve hedefler:</b> aynı adlı olanlar kendiliğinden eşleşir. Burada bulunmayan adlar için açılır liste çıkar; örneğin <code>TEST-ERP</code>'yi <code>PROD-ERP</code>'ye eşleyin.</li>
+        <li><b>Zaten var olan job'lar</b> (aynı ad) varsayılan olarak olduğu gibi bırakılır. <b>overwrite with the file</b> seçilirse ayarları, kalite kontrolleri ve bağımlılıkları dosyadakiyle değişir.
+            Mevcut job aktif/pasif durumunu ve watermark'ını korur: canlıda çalışan bir job kapanmaz, verisi baştan yüklenmez.</li>
+        <li><b>Yeni job'lar pasif oluşturulur</b> (varsayılan): siz bakmadan hiçbir şey çalışmaz. Job'u açıp <b>Active</b> kutusunu işaretleyin.</li>
+        <li>Kaydederken yapılan kontrollerin hepsi burada da yapılır: sunucu/veritabanı yetkileriniz, saklama politikası, Merge ve rebuild hedef tabloları,
+            cron ifadeleri ve bağımlılıklar (beklenen job dosyada ya da burada olmalı; döngü olamaz). İndirme ve içe aktarmalar Audit log'a yazılır.</li>
+    </ul>
+    <p><b>Komut satırı</b> (örneğin kurulum hattında; kurulumun kendi ayarlarıyla çalışır):</p>
+    <pre class="mono small bg-light p-2 border rounded">SqlDataCollector.exe jobs-export jobs.json [--extract 1,2] [--export 3] [--no-upstreams]
+SqlDataCollector.exe jobs-import jobs.json --dry-run --map-server TEST-ERP=PROD-ERP --map-destination test-bucket=prod-bucket
+SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [--map-server DOSYADAKI=BURADAKI]...</pre>
+    <p class="small">Job numarası verilmezse <code>jobs-export</code> tüm job'ları yazar. <code>jobs-import</code> planı yazdırır; hata varsa hiçbir şeyi değiştirmez ve 1 koduyla çıkar.
+       <code>--dry-run</code> yalnızca planı gösterir. Komut satırı servis hesabının yetkisiyle (Admin gibi) çalışır; aktif job'ların zamanlamasını Worker'daki eşitleme job'u kaydeder.</p>
+</section>
+
 <section id="servers">
     <h2>Sunucular ve servis hesapları</h2>
     <ul>

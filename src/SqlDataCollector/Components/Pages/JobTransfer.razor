@@ -1,0 +1,327 @@
+@page "/transfer"
+@attribute [Authorize(Policy = AppRoles.Viewer)]
+@inject MetadataRepository Repo
+@inject AccessService Access
+@inject JobTransferService Transfer
+@inject JobRegistrar Registrar
+@inject IJSRuntime JS
+
+<PageTitle>Import / export jobs</PageTitle>
+
+<h1 class="h4 mb-2">Import and export jobs <HelpLink Topic="transfer" Title="Import and export jobs" /></h1>
+<p class="small text-muted">Copy job definitions to another installation (e.g. from test to production), keep them in version control or as a backup.
+    The file refers to servers, destinations and upstream jobs by name; keys and passwords are never included.</p>
+
+@if (!string.IsNullOrEmpty(error)) { <div class="alert alert-danger py-2" style="white-space: pre-line">@error</div> }
+@if (!string.IsNullOrEmpty(info)) { <div class="alert alert-success py-2" style="white-space: pre-line">@info</div> }
+
+<div class="card mb-4"><div class="card-body">
+    <div class="d-flex align-items-center mb-2">
+        <div class="section-title me-auto">Export</div>
+        <button class="btn btn-sm btn-outline-secondary me-1" @onclick="() => SelectAll(true)">Select all</button>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => SelectAll(false)">Select none</button>
+    </div>
+    <table class="table table-sm table-hover mb-2">
+        <thead class="table-light"><tr><th style="width: 2rem"></th><th>Job</th><th>Kind</th><th>Source</th><th>Schedule</th></tr></thead>
+        <tbody>
+            @if (extracts.Count + exports.Count == 0) { <tr><td colspan="5" class="small text-muted">No jobs yet.</td></tr> }
+            @foreach (var j in extracts)
+            {
+                var r = new JobRef(JobRef.Extract, j.ExtractJobId);
+                <tr class="@(j.IsActive ? "" : "text-muted")">
+                    <td><input type="checkbox" class="form-check-input" checked="@selected.Contains(r)" @onchange="e => Toggle(r, e)" aria-label="Select @j.Name" /></td>
+                    <td>@j.Name @if (!j.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                    <td class="small">Extract</td>
+                    <td class="mono small">@j.SourceServerName / @j.SourceDatabase</td>
+                    <td><ScheduleCell Kind="@JobRef.Extract" JobId="j.ExtractJobId" Cron="@j.CronExpression" AfterJobs="@(j.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
+                </tr>
+            }
+            @foreach (var e in exports)
+            {
+                var r = new JobRef(JobRef.Export, e.ExportJobId);
+                <tr class="@(e.IsActive ? "" : "text-muted")">
+                    <td><input type="checkbox" class="form-check-input" checked="@selected.Contains(r)" @onchange="ev => Toggle(r, ev)" aria-label="Select @e.Name" /></td>
+                    <td>@e.Name @if (!e.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
+                    <td class="small">Export</td>
+                    <td class="mono small">@e.SourceServerName / @e.SourceDatabase</td>
+                    <td><ScheduleCell Kind="@JobRef.Export" JobId="e.ExportJobId" Cron="@e.CronExpression" AfterJobs="@(e.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    <div class="d-flex align-items-center flex-wrap gap-3">
+        <div class="form-check mb-0">
+            <input id="withUpstreams" type="checkbox" class="form-check-input" @bind="includeUpstreams" />
+            <label for="withUpstreams" class="form-check-label small">Also include the jobs they run after</label>
+        </div>
+        <button class="btn btn-sm btn-primary" disabled="@(selected.Count == 0 || busy)" @onclick="DownloadAsync">Download JSON (@selected.Count job(s))</button>
+    </div>
+</div></div>
+
+@if (canEdit)
+{
+    <div class="card"><div class="card-body">
+        <div class="section-title mb-2">Import</div>
+        <div class="row g-2 align-items-center mb-2">
+            <div class="col-md-6"><InputFile class="form-control form-control-sm" accept=".json,application/json" OnChange="LoadFileAsync" /></div>
+            @if (package is not null)
+            {
+                <div class="col-md-6 small text-muted">
+                    @fileName: @package.ExtractJobs.Count extract and @package.ExportJobs.Count export job(s)
+                    · exported @Ui.Local(package.ExportedAtUtc)@(string.IsNullOrEmpty(package.ExportedBy) ? "" : " by " + package.ExportedBy)@(string.IsNullOrEmpty(package.AppVersion) ? "" : $" (v{package.AppVersion})")
+                </div>
+            }
+        </div>
+
+        @if (package is not null)
+        {
+            @if (serverNames.Count > 0)
+            {
+                <div class="small fw-semibold mt-3 mb-1">Servers</div>
+                <table class="table table-sm mb-2" style="max-width: 760px">
+                    <thead class="table-light"><tr><th>In the file</th><th>Server here</th></tr></thead>
+                    <tbody>
+                        @foreach (var name in serverNames)
+                        {
+                            <tr>
+                                <td class="mono small">@name</td>
+                                <td>
+                                    <select class="form-select form-select-sm" value="@serverMap.GetValueOrDefault(name)" @onchange="e => MapServerAsync(name, e)" aria-label="Server for @name">
+                                        <option value="0">– choose –</option>
+                                        @foreach (var s in servers) { <option value="@s.SqlServerId">@s.Name (@s.ServerAddress)</option> }
+                                    </select>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            @if (destinationNames.Count > 0)
+            {
+                <div class="small fw-semibold mt-3 mb-1">Destinations</div>
+                <table class="table table-sm mb-2" style="max-width: 760px">
+                    <thead class="table-light"><tr><th>In the file</th><th>Destination here</th></tr></thead>
+                    <tbody>
+                        @foreach (var name in destinationNames)
+                        {
+                            <tr>
+                                <td class="mono small">@name</td>
+                                <td>
+                                    <select class="form-select form-select-sm" value="@destinationMap.GetValueOrDefault(name)" @onchange="e => MapDestinationAsync(name, e)" aria-label="Destination for @name">
+                                        <option value="0">– choose –</option>
+                                        @foreach (var d in destinations) { <option value="@d.DestinationId">@d.Name (@d.Summary)@(d.IsActive ? "" : " – inactive")</option> }
+                                    </select>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <div class="small fw-semibold mt-3 mb-1">Options</div>
+            <div class="d-flex flex-wrap gap-4 mb-3 small">
+                <div>
+                    Jobs whose name already exists here:
+                    <div class="form-check form-check-inline ms-2 mb-0">
+                        <input id="exSkip" type="radio" class="form-check-input" name="existing" checked="@(options.ExistingJobs == ExistingJobAction.Skip)" @onchange="() => SetExistingAsync(ExistingJobAction.Skip)" />
+                        <label for="exSkip" class="form-check-label">leave unchanged</label>
+                    </div>
+                    <div class="form-check form-check-inline mb-0">
+                        <input id="exUpdate" type="radio" class="form-check-input" name="existing" checked="@(options.ExistingJobs == ExistingJobAction.Update)" @onchange="() => SetExistingAsync(ExistingJobAction.Update)" />
+                        <label for="exUpdate" class="form-check-label">overwrite with the file</label>
+                    </div>
+                </div>
+                <div class="form-check mb-0">
+                    <input id="inactive" type="checkbox" class="form-check-input" checked="@options.NewJobsInactive" @onchange="SetInactiveAsync" />
+                    <label for="inactive" class="form-check-label">Create new jobs inactive (nothing runs until they are activated)</label>
+                </div>
+            </div>
+
+            @if (plan is not null)
+            {
+                @foreach (var e in plan.Errors) { <div class="alert alert-danger py-1 small mb-2">@e</div> }
+                <table class="table table-sm mb-2">
+                    <thead class="table-light"><tr><th>Job</th><th>Kind</th><th>Action</th><th>Details</th></tr></thead>
+                    <tbody>
+                        @foreach (var i in plan.Items)
+                        {
+                            <tr>
+                                <td>@i.Name</td>
+                                <td class="small">@i.Kind</td>
+                                <td><span class="badge @Badge(i.Action)">@ActionText(i.Action)</span></td>
+                                <td class="small @(i.Action == ImportAction.Error ? "text-danger" : "text-muted")">
+                                    @foreach (var m in i.Messages) { <div>@m</div> }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <div class="d-flex align-items-center flex-wrap gap-3">
+                    <span class="small">
+                        @plan.Count(ImportAction.Create) to create · @plan.Count(ImportAction.Update) to overwrite · @plan.Count(ImportAction.Skip) unchanged
+                        @if (plan.HasErrors) { <span class="text-danger"> · @(plan.Count(ImportAction.Error) + plan.Errors.Count) error(s): fix the mapping or the file</span> }
+                    </span>
+                    <button class="btn btn-sm btn-primary" disabled="@(busy || plan.HasErrors || plan.Count(ImportAction.Create) + plan.Count(ImportAction.Update) == 0)" @onclick="ImportAsync">Import</button>
+                </div>
+            }
+        }
+    </div></div>
+}
+
+@code {
+    private IReadOnlyList<ExtractJobDef> extracts = [];
+    private IReadOnlyList<ExportJobDef> exports = [];
+    private IReadOnlyList<JobDependencyRow> deps = [];
+    private readonly HashSet<JobRef> selected = [];
+    private bool includeUpstreams = true, canEdit, busy;
+    private string? error, info;
+
+    private JobPackage? package;
+    private string? fileName;
+    private IReadOnlyList<SqlServerDef> servers = [];
+    private IReadOnlyList<DestinationDef> destinations = [];
+    private IReadOnlyList<string> serverNames = [], destinationNames = [];
+    private readonly Dictionary<string, int> serverMap = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> destinationMap = new(StringComparer.OrdinalIgnoreCase);
+    private readonly JobImportOptions options = new();
+    private ImportPlan? plan;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            canEdit = await Access.CanEditAsync();
+            await LoadJobsAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task LoadJobsAsync()
+    {
+        extracts = await Repo.GetExtractJobsAsync();
+        exports = await Repo.GetExportJobsAsync();
+        deps = await Repo.GetJobDependenciesAsync();
+    }
+
+    private void Toggle(JobRef r, ChangeEventArgs e)
+    {
+        if (e.Value is true) selected.Add(r); else selected.Remove(r);
+    }
+
+    private void SelectAll(bool on)
+    {
+        selected.Clear();
+        if (!on) return;
+        foreach (var j in extracts) selected.Add(new JobRef(JobRef.Extract, j.ExtractJobId));
+        foreach (var e in exports) selected.Add(new JobRef(JobRef.Export, e.ExportJobId));
+    }
+
+    private async Task DownloadAsync()
+    {
+        error = null; info = null; busy = true;
+        try
+        {
+            var pkg = await Transfer.ExportAsync(
+                selected.Where(r => r.Kind == JobRef.Extract).Select(r => r.Id).ToList(),
+                selected.Where(r => r.Kind == JobRef.Export).Select(r => r.Id).ToList(),
+                includeUpstreams, await Access.UserNameAsync());
+            await JS.InvokeVoidAsync("sdcDownload", $"sdc-jobs-{DateTime.Now:yyyyMMdd-HHmm}.json", JobPackageJson.Serialize(pkg), "application/json");
+            info = $"Downloaded {pkg.ExtractJobs.Count} extract and {pkg.ExportJobs.Count} export job(s).";
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { busy = false; }
+    }
+
+    // ---------------- import ----------------
+
+    private async Task LoadFileAsync(InputFileChangeEventArgs e)
+    {
+        error = null; info = null; package = null; plan = null;
+        try
+        {
+            if (e.File.Size > JobPackageJson.MaxBytes) throw new InvalidDataException($"The file is larger than {JobPackageJson.MaxBytes / 1024 / 1024} MB.");
+            using var reader = new StreamReader(e.File.OpenReadStream(JobPackageJson.MaxBytes));
+            var pkg = JobPackageJson.Deserialize(await reader.ReadToEndAsync());
+            fileName = e.File.Name;
+            servers = (await Access.AllowedServersAsync("Any")).ToList();
+            destinations = await Repo.GetDestinationsAsync();
+            serverNames = pkg.ServerNames();
+            destinationNames = pkg.DestinationNames();
+            serverMap.Clear(); destinationMap.Clear();
+            foreach (var n in serverNames)
+                if (servers.FirstOrDefault(s => s.Name.Equals(n, StringComparison.OrdinalIgnoreCase)) is { } s) serverMap[n] = s.SqlServerId;
+            foreach (var n in destinationNames)
+                if (destinations.FirstOrDefault(d => d.Name.Equals(n, StringComparison.OrdinalIgnoreCase)) is { } d) destinationMap[n] = d.DestinationId;
+            package = pkg;
+            await PlanAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task PlanAsync()
+    {
+        if (package is null) return;
+        // names without a choice fall back to the object with the same name (the plan then reports a missing permission precisely)
+        options.ServerMap = serverMap.Where(kv => kv.Value != 0).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        options.DestinationMap = destinationMap.Where(kv => kv.Value != 0).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        plan = await Transfer.PlanAsync(package, options, await Access.ImportAccessAsync());
+    }
+
+    private async Task MapServerAsync(string name, ChangeEventArgs e)
+    {
+        serverMap[name] = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        await Guard(PlanAsync);
+    }
+
+    private async Task MapDestinationAsync(string name, ChangeEventArgs e)
+    {
+        destinationMap[name] = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        await Guard(PlanAsync);
+    }
+
+    private async Task SetExistingAsync(ExistingJobAction a) { options.ExistingJobs = a; await Guard(PlanAsync); }
+
+    private async Task SetInactiveAsync(ChangeEventArgs e) { options.NewJobsInactive = e.Value is true; await Guard(PlanAsync); }
+
+    private async Task ImportAsync()
+    {
+        if (package is null) return;
+        error = null; info = null; busy = true;
+        try
+        {
+            var result = await Transfer.ApplyAsync(package, options, await Access.ImportAccessAsync());
+            // the Web registers schedules right away (the sync job would catch up within minutes)
+            foreach (var j in result.Extracts) Registrar.Register(j);
+            foreach (var e in result.Exports) Registrar.Register(e);
+            info = $"Imported: {result.Created} created, {result.Updated} overwritten, {result.Skipped} left unchanged."
+                 + (options.NewJobsInactive && result.Created > 0 ? "\nNew jobs are inactive: open each job and tick Active when it should run." : "");
+            await LoadJobsAsync();
+            await PlanAsync();
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { busy = false; }
+    }
+
+    private async Task Guard(Func<Task> action)
+    {
+        error = null;
+        try { await action(); }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private static string Badge(ImportAction a) => a switch
+    {
+        ImportAction.Create => "bg-success",
+        ImportAction.Update => "bg-warning text-dark",
+        ImportAction.Skip => "bg-light text-dark border",
+        _ => "bg-danger"
+    };
+
+    private static string ActionText(ImportAction a) => a switch
+    {
+        ImportAction.Create => "create",
+        ImportAction.Update => "overwrite",
+        ImportAction.Skip => "unchanged",
+        _ => "error"
+    };
+}
