@@ -12,6 +12,9 @@ public enum QuoteMode : byte { Minimal = 0, AllText = 1, All = 2 }
 
 public enum SchemaPolicy : byte { Strict = 1, Evolve = 2 }
 
+/// <summary>Physical layout of a target table the collector creates: B-tree indexes (Rowstore) or a clustered columnstore index.</summary>
+public enum TargetStorage : byte { Rowstore = 1, Columnstore = 2 }
+
 /// <summary>How a job is started: on its cron schedule, or after its upstream jobs (etl.JobDependency) have all succeeded.</summary>
 public enum JobTriggerMode : byte { Schedule = 1, AfterJobs = 2 }
 
@@ -52,6 +55,7 @@ public sealed class ExtractJobDef
     public string? WatermarkColumn { get; set; }
     public SchemaPolicy SchemaPolicy { get; set; } = SchemaPolicy.Strict;
     public bool PartitionDaily { get; set; }
+    public TargetStorage TargetStorage { get; set; } = TargetStorage.Rowstore;   // applies when the table is created
     public int TargetServerId { get; set; }
     public string TargetServerName { get; set; } = "";
     public string TargetDatabase { get; set; } = "";

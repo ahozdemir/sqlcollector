@@ -153,6 +153,20 @@
     </table>
 </section>
 
+<section id="storage">
+    <h2>Hedef tablo yapısı: rowstore veya columnstore</h2>
+    <p><i>2 · Target</i> bölümündeki <b>Storage</b> seçeneği yeni hedef tablonun nasıl kurulacağını belirler:</p>
+    <ul>
+        <li><b>Rowstore</b> (varsayılan): klasik indeksli tablo. Küçük ve orta boy tablolar, satır satır sorgulanan tablolar için.</li>
+        <li><b>Columnstore</b>: büyük ve toplu okunan tablolar (rapor, export, BigQuery/Spark beslemesi) için. Yükleme çok daha hızlıdır, tablo çok daha az yer kaplar.
+            450.000 satırlık ölçümde: PAGE sıkıştırmalı rowstore 18,4 sn, columnstore 4,3 sn.</li>
+        <li>Bütün yükleme modlarında ve günlük bölümlemede çalışır; saklama süresi yine eski günleri bölüm bölüm siler.</li>
+        <li><code>xml</code> ve <code>sql_variant</code> kolonları columnstore'da tutulamaz; yükleme bu kolonların adlarıyla hata verir. Rowstore seçin ya da sorguda dönüştürün
+            (<code>CAST(Doc AS nvarchar(max)) AS Doc</code>). Hedefte SQL Server 2016 SP1 veya üstü gerekir.</li>
+        <li>Seçenek <b>tablo oluşturulurken</b> geçerlidir; mevcut bir tablo olduğu gibi kalır. Dönüştürmek için bir kez "Replace + rebuild" ile yükleyin ya da DBA'den isteyin.</li>
+    </ul>
+</section>
+
 <section id="load-modes">
     <h2>Yükleme modları</h2>
     <table class="table table-sm table-bordered bg-white">

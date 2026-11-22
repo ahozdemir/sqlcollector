@@ -142,7 +142,7 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
     /// <returns>Map of source column name → actual target column name.</returns>
     public async Task<IReadOnlyDictionary<string, string>> EnsureAsync(
         SqlConnection conn, string schema, string table, IReadOnlyList<DbColumn> sourceColumns,
-        SchemaPolicy policy, bool partitionDaily, CancellationToken ct)
+        SchemaPolicy policy, bool partitionDaily, CancellationToken ct, TargetStorage storage = TargetStorage.Rowstore)
     {
         ValidateSourceColumns(sourceColumns);
         var fullName = SqlIdent.Quote(schema, table);
@@ -157,7 +157,7 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
         var existing = await GetColumnsAsync(conn, tx, fullName, ct);
         if (existing.Count == 0)
         {
-            await CreateTableAsync(conn, tx, schema, table, sourceColumns, partitionDaily, ct);
+            await CreateTableAsync(conn, tx, schema, table, sourceColumns, partitionDaily, storage, ct);
         }
         else
         {
@@ -236,8 +236,9 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
     }
 
     private async Task CreateTableAsync(SqlConnection conn, SqlTransaction tx, string schema, string table,
-        IReadOnlyList<DbColumn> cols, bool partitionDaily, CancellationToken ct, string? indexBase = null)
+        IReadOnlyList<DbColumn> cols, bool partitionDaily, TargetStorage storage, CancellationToken ct, string? indexBase = null)
     {
+        if (storage == TargetStorage.Columnstore) ValidateColumnstoreColumns(cols);
         var full = SqlIdent.Quote(schema, table);
         var safe = indexBase ?? Safe(schema + "_" + table);
         var sb = new StringBuilder();
@@ -274,12 +275,40 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
         var la = SqlIdent.Quote(SqlIdent.LoadedAtColumn);
         var li = SqlIdent.Quote(SqlIdent.LoadIdColumn);
         var jid = SqlIdent.Quote(SqlIdent.ExtractJobIdColumn);
-        sb.AppendLine($"CREATE CLUSTERED INDEX {SqlIdent.Quote("CIX_" + safe)} ON {full} ({la}, {li}){compression}{onClause};");
-        sb.AppendLine($"CREATE NONCLUSTERED INDEX {SqlIdent.Quote("IX_" + safe + "_Job")} ON {full} ({jid}, {li}){compression}{onClause};");
-        sb.AppendLine($"CREATE NONCLUSTERED INDEX {SqlIdent.Quote("IX_" + safe + "_LoadId")} ON {full} ({li}){compression}{onClause};");
+        if (storage == TargetStorage.Columnstore)
+        {
+            // no other indexes: every load goes straight into compressed rowgroups; filters on _LoadId / _LoadedAt skip
+            // rowgroups by their min/max values (loads arrive in order), retention truncates partitions or deletes
+            sb.AppendLine($"CREATE CLUSTERED COLUMNSTORE INDEX {SqlIdent.Quote("CCI_" + safe)} ON {full}{onClause};");
+        }
+        else
+        {
+            sb.AppendLine($"CREATE CLUSTERED INDEX {SqlIdent.Quote("CIX_" + safe)} ON {full} ({la}, {li}){compression}{onClause};");
+            sb.AppendLine($"CREATE NONCLUSTERED INDEX {SqlIdent.Quote("IX_" + safe + "_Job")} ON {full} ({jid}, {li}){compression}{onClause};");
+            sb.AppendLine($"CREATE NONCLUSTERED INDEX {SqlIdent.Quote("IX_" + safe + "_LoadId")} ON {full} ({li}){compression}{onClause};");
+        }
 
         await ExecAsync(conn, tx, sb.ToString(), ct);
-        logger.LogInformation("Target table created: {Table} ({Count} columns, daily partitioning: {Part})", full, cols.Count, partitionDaily);
+        logger.LogInformation("Target table created: {Table} ({Count} columns, {Storage}, daily partitioning: {Part})", full, cols.Count, storage, partitionDaily);
+    }
+
+    /// <summary>Columnstore indexes cannot contain xml or sql_variant columns.</summary>
+    public static void ValidateColumnstoreColumns(IReadOnlyList<DbColumn> cols)
+    {
+        var unsupported = cols.Where(c => SqlTypeMapper.Map(c).BaseType is "xml" or "sql_variant").Select(c => c.ColumnName).ToList();
+        if (unsupported.Count > 0)
+            throw new InvalidOperationException(
+                $"A columnstore target table cannot hold xml or sql_variant columns ({string.Join(", ", unsupported)}). " +
+                "Choose Rowstore storage or convert them in a query, e.g. CAST(col AS nvarchar(max)) AS col.");
+    }
+
+    /// <summary>True when the table has a clustered columnstore index (decides the bulk copy batch size).</summary>
+    public static async Task<bool> IsColumnstoreAsync(SqlConnection conn, string schema, string table, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(@n, N'U') AND type = 5) THEN 1 ELSE 0 END;";
+        cmd.Parameters.AddWithValue("@n", SqlIdent.Quote(schema, table));
+        return (int)(await cmd.ExecuteScalarAsync(ct))! == 1;
     }
 
     private async Task EvolveAsync(SqlConnection conn, SqlTransaction tx, string full,
@@ -502,7 +531,8 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
     /// An existing target table must be a collector table (has _LoadId); anything else is never replaced.
     /// </summary>
     public async Task<IReadOnlyDictionary<string, string>> PrepareRebuildAsync(
-        SqlConnection conn, string schema, string table, IReadOnlyList<DbColumn> sourceColumns, CancellationToken ct)
+        SqlConnection conn, string schema, string table, IReadOnlyList<DbColumn> sourceColumns, CancellationToken ct,
+        TargetStorage storage = TargetStorage.Rowstore)
     {
         ValidateSourceColumns(sourceColumns);
         if (table.Length + RebuildSuffix.Length > 128)
@@ -522,7 +552,7 @@ public sealed class TargetTableManager(IOptions<CollectorOptions> options, ILogg
         await DropCollectorTableAsync(conn, tx, schema, staging, ct);
 
         // index names as for the final table: index names are per table, so after the rename they are the usual ones
-        await CreateTableAsync(conn, tx, schema, staging, sourceColumns, partitionDaily: false, ct, indexBase: Safe(schema + "_" + table));
+        await CreateTableAsync(conn, tx, schema, staging, sourceColumns, partitionDaily: false, storage, ct, indexBase: Safe(schema + "_" + table));
         var cols = await GetColumnsAsync(conn, tx, SqlIdent.Quote(schema, staging), ct);
         await tx.CommitAsync(ct);
 

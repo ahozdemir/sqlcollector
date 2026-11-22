@@ -145,6 +145,10 @@ if (args.Length > 1 && args[0] is "jobs-export" or "jobs-import")
     });
     cli.Services.AddSqlDataCollectorCore(cli.Configuration);
     using var host = cli.Build();
+    // like the service start and run-job: an existing metadata DB is upgraded first (new columns), unless the DBA manages the schema
+    if ((cli.Configuration.GetSection(CollectorOptions.Section).Get<CollectorOptions>() ?? new()).AutoCreateSchema)
+        await SchemaInstaller.InstallAsync(host.Services.GetRequiredService<SqlConnectionFactory>(),
+            host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("jobs"), CancellationToken.None);
     var transfer = host.Services.GetRequiredService<JobTransferService>();
     var cliUser = $"cli:{Environment.UserName}";
     var file = Path.GetFullPath(args[1]);

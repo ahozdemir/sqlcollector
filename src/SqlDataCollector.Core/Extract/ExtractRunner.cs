@@ -47,6 +47,9 @@ public sealed class ExtractRunner(
     IOptions<CollectorOptions> options,
     ILogger<ExtractRunner> logger)
 {
+    /// <summary>Rows per bulk copy batch into a columnstore table (one full rowgroup).</summary>
+    public const int ColumnstoreBatchSize = 1_048_576;
+
     [JobDisplayName("Extract #{0}: {1}")]
     [AutomaticRetry(Attempts = 2, DelaysInSeconds = [120, 600], OnAttemptsExceeded = AttemptsExceededAction.Fail)]
     public async Task RunAsync(int extractJobId, string jobName, string? triggeredBy, CancellationToken ct)
@@ -220,8 +223,8 @@ public sealed class ExtractRunner(
         var targetColumns = Privacy.MaskedDbColumn.Apply(schema, masks);
 
         var map = rebuild
-            ? await tableManager.PrepareRebuildAsync(collector, job.TargetSchema, job.TargetTable, targetColumns, ct)
-            : await tableManager.EnsureAsync(collector, job.TargetSchema, job.TargetTable, targetColumns, job.SchemaPolicy, job.PartitionDaily, ct);
+            ? await tableManager.PrepareRebuildAsync(collector, job.TargetSchema, job.TargetTable, targetColumns, ct, job.TargetStorage)
+            : await tableManager.EnsureAsync(collector, job.TargetSchema, job.TargetTable, targetColumns, job.SchemaPolicy, job.PartitionDaily, ct, job.TargetStorage);
 
         int? wmOrdinal = null;
         string? wmType = null;
@@ -251,13 +254,20 @@ public sealed class ExtractRunner(
             await mergeLoader.CreateStagingAsync(collector, job.TargetSchema, job.TargetTable, ct);
         }
 
+        // a columnstore table takes rows straight into compressed rowgroups only in batches of at least 102,400 rows;
+        // smaller batches land in the uncompressed delta store (the table decides, not the job setting: an existing table is never converted)
+        var batchSize = job.BatchSize;
+        if (plan is null && await TargetTableManager.IsColumnstoreAsync(collector, job.TargetSchema,
+                rebuild ? job.TargetTable + TargetTableManager.RebuildSuffix : job.TargetTable, ct))
+            batchSize = Math.Max(batchSize, ColumnstoreBatchSize);
+
         using var augmented = new AugmentedDataReader(reader, loadId, loadedAtUtc, job.ExtractJobId, job.SourceServerName, wmOrdinal, masks);
         // rebuild: empty staging table, TABLOCK allows minimal logging
         using var bulk = new SqlBulkCopy(collector, rebuild || plan is not null ? SqlBulkCopyOptions.KeepNulls | SqlBulkCopyOptions.TableLock : SqlBulkCopyOptions.KeepNulls, null)
         {
             DestinationTableName = plan is not null ? MergeSql.Staging
                 : SqlIdent.Quote(job.TargetSchema, rebuild ? job.TargetTable + TargetTableManager.RebuildSuffix : job.TargetTable),
-            BatchSize = job.BatchSize,
+            BatchSize = batchSize,
             BulkCopyTimeout = 0,
             NotifyAfter = Math.Max(job.BatchSize * 10, 100_000)
         };

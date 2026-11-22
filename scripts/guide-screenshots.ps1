@@ -26,10 +26,10 @@ $shots = @(
     @{ Name = "status-overview";  Page = "/";               H = 1000; X = 256; Y = 64;  W = 1168; Ht = 210; Auth = $true },
     @{ Name = "status-jobs";      Page = "/";               H = 1100; X = 256; Y = 440; W = 1168; Ht = 650; Auth = $true },
     @{ Name = "extract-source";   Page = "/extract/3";      H = 2400; X = 262; Y = 141; W = 568;  Ht = 700; Auth = $true },
-    @{ Name = "extract-target";   Page = "/extract/3";      H = 2400; X = 834; Y = 141; W = 568;  Ht = 568; Auth = $true },
-    @{ Name = "extract-trigger";  Page = "/extract/3";      H = 2400; X = 834; Y = 713; W = 568;  Ht = 368; Auth = $true },
-    @{ Name = "extract-quality";  Page = "/extract/3";      H = 2400; X = 834; Y = 1085; W = 568; Ht = 572; Auth = $true },
-    @{ Name = "merge-load";       Page = "/extract/9";      H = 2400; X = 834; Y = 438; W = 568;  Ht = 489; Auth = $true },
+    @{ Name = "extract-target";   Page = "/extract/3";      H = 2400; X = 834; Y = 141; W = 568;  Ht = 634; Auth = $true },
+    @{ Name = "extract-trigger";  Page = "/extract/3";      H = 2400; X = 834; Y = 779; W = 568;  Ht = 368; Auth = $true },
+    @{ Name = "extract-quality";  Page = "/extract/3";      H = 2400; X = 834; Y = 1152; W = 568; Ht = 572; Auth = $true },
+    @{ Name = "merge-load";       Page = "/extract/9";      H = 2400; X = 834; Y = 504; W = 568;  Ht = 489; Auth = $true },
     @{ Name = "export-format";    Page = "/export/1";       H = 1600; X = 834; Y = 339; W = 568;  Ht = 351; Auth = $true },
     @{ Name = "export-trigger";   Page = "/export/1";       H = 1600; X = 834; Y = 694; W = 568;  Ht = 614; Auth = $true },
     @{ Name = "privacy";          Page = "/admin/privacy";  H = 1000; X = 256; Y = 64;  W = 1168; Ht = 500; Auth = $true },
@@ -41,6 +41,7 @@ $shots = @(
     @{ Name = "settings-gcs";     Page = "/admin/settings"; H = 1400; X = 262; Y = 728; W = 1141; Ht = 261; Auth = $true }
 )
 
+$Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })   # "-Only a,b" arrives as one string with -File
 if ($Only.Count -gt 0) { $shots = @($shots | Where-Object { $Only -contains $_.Name }) }
 foreach ($s in $shots) {
     $raw = Join-Path $work "$($s.Name)-raw.png"

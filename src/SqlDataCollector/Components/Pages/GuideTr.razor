@@ -82,6 +82,7 @@
             <GuideFigure Src="guide/merge-load.png" Caption="Merge: anahtar kolon (PK) otomatik önerilir; değişmeyen satırlara dokunulmaz." />
         </li>
         <li>İşlemlerin sürdüğü kaynaklarda <b>1 · Source</b> bölümünde <b>Read a consistent snapshot</b>'ı açın (DBA'nın bir kez izin vermesi gerekir; form durumu gösterir).</li>
+        <li>Milyonlarca satırlık tablolarda ilk çalıştırmadan önce <b>2 · Target</b> bölümünde <b>Storage: Columnstore</b> seçin: yükleme yaklaşık dört kat hızlanır, tablo da çok daha az yer kaplar. Seçenek tablo oluşturulurken geçerlidir.</li>
     </ol>
     <div class="alert alert-info"><b>Öneri.</b> Mümkünse watermark olarak <code>rowversion</code> kolonu kullanın: geç kaydedilen işlemleri de kaçırmaz. Saat kolonları (ModifiedAt) çoğu durumda yeterlidir.</div>
     <div class="alert alert-warning"><b>Dikkat.</b> Anahtar kolon gerçekten tek satırı tanımlamalıdır. Kaynakta aynı anahtar iki kez gelirse job durur ve hedefe dokunmaz – veri bozulmasın diye.

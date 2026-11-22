@@ -13,7 +13,7 @@ public class JobTransferTests
             new ExtractJobSpec
             {
                 Name = "erp_orders", SourceServer = "ERP", SourceDatabase = "ERP", SourceSchema = "dbo", SourceTable = "Orders",
-                LoadMode = LoadMode.Merge, KeyColumns = "OrderId", TargetServer = "DWH", TargetDatabase = "SdcDwh", TargetTable = "Orders",
+                LoadMode = LoadMode.Merge, KeyColumns = "OrderId", TargetStorage = TargetStorage.Columnstore, TargetServer = "DWH", TargetDatabase = "SdcDwh", TargetTable = "Orders",
                 TriggerMode = JobTriggerMode.Schedule, CronExpression = "*/15 * * * *", TimeZoneId = "UTC", RetentionDays = 30,
                 QualityChecks = [new QualityCheckSpec { CheckType = QualityCheckTypes.Duplicates, ColumnName = "OrderId", Threshold = 0 }]
             }
@@ -37,6 +37,7 @@ public class JobTransferTests
         Assert.Contains("\"format\": \"SqlDataCollector.Jobs\"", json);
         Assert.Contains("\"loadMode\": \"Merge\"", json);
         Assert.Contains("\"fileFormat\": \"Parquet\"", json);
+        Assert.Contains("\"targetStorage\": \"Columnstore\"", json);
         Assert.Contains("\"triggerMode\": \"AfterJobs\"", json);
         Assert.DoesNotContain("\"sourceQuery\"", json);   // null: not written
         Assert.DoesNotContain("secret", json, StringComparison.OrdinalIgnoreCase);
@@ -45,6 +46,7 @@ public class JobTransferTests
         var x = Assert.Single(back.ExtractJobs);
         Assert.Equal("erp_orders", x.Name);
         Assert.Equal(LoadMode.Merge, x.LoadMode);
+        Assert.Equal(TargetStorage.Columnstore, x.TargetStorage);
         Assert.Equal(30, x.RetentionDays);
         Assert.Equal(QualityCheckTypes.Duplicates, Assert.Single(x.QualityChecks).CheckType);
         var e = Assert.Single(back.ExportJobs);

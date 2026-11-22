@@ -139,6 +139,31 @@
             <p>A pre-existing table without the technical columns is never "identical"; use Evolve or a new table name.</p>
         </section>
 
+        <section id="storage">
+            <h2>Target storage: rowstore or columnstore</h2>
+            <p><b>Storage</b> in section <i>2 · Target</i> decides how a new target table is built:</p>
+            <table class="table table-sm table-bordered bg-white">
+                <thead class="table-light"><tr><th>Storage</th><th>Table</th><th>Use for</th></tr></thead>
+                <tbody>
+                    <tr><td><b>Rowstore</b> (default)</td><td>clustered index on <code>_LoadedAt, _LoadId</code> plus two nonclustered indexes, compression from <code>Collector:TargetTableCompression</code> (PAGE by default)</td>
+                        <td>small and medium tables, tables queried row by row</td></tr>
+                    <tr><td><b>Columnstore</b></td><td>one clustered columnstore index, no other indexes</td>
+                        <td>large tables that are read in bulk (reports, exports, BigQuery/Spark feeds)</td></tr>
+                </tbody>
+            </table>
+            <ul>
+                <li><b>Why it is faster:</b> rows go in batches of 1,048,576 straight into compressed rowgroups; a rowstore table maintains three B-tree indexes row by row.
+                    Measured on 450,000 rows: rowstore with PAGE compression 18.4 s, without compression 11.0 s, columnstore 4.3 s. Columnstore tables are also much smaller
+                    and scans (exports, reports) read only the columns they need.</li>
+                <li><b>Works with every load mode</b>: Append, Replace (also with rebuild – the new table is columnstore too), Incremental, Merge (the unique key index is
+                    added on top of the columnstore) and daily partitioning (retention still truncates whole days).</li>
+                <li><b>Limits:</b> <code>xml</code> and <code>sql_variant</code> columns are not allowed (the load fails with the column names) – choose Rowstore or convert them in a
+                    query, e.g. <code>CAST(Doc AS nvarchar(max)) AS Doc</code>. Needs SQL Server 2016 SP1 or later on the target.</li>
+                <li>The setting applies <b>when the table is created</b>. An existing table keeps its layout; to convert one, use Replace with rebuild once or ask the DBA.</li>
+                <li>Small frequent loads (e.g. a few hundred rows every 15 minutes) first land in an uncompressed delta store; SQL Server compresses it in the background.</li>
+            </ul>
+        </section>
+
         <section id="load-modes">
             <h2>Load modes</h2>
             <table class="table table-sm table-bordered bg-white">
@@ -646,7 +671,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
     private static readonly (string Id, string Title)[] Toc =
     [
         ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
-        ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"),
+        ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"), ("storage", "Target storage: rowstore or columnstore"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "Exports"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("transfer", "Import and export jobs"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
@@ -658,7 +683,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
     [
         ("overview", "Genel bakış"), ("quick-start", "Hızlı başlangıç"), ("ornekler", "Adım adım örnekler"), ("sss", "Sık sorulan sorular"),
         ("architecture", "Nasıl çalışır: Web ve Worker"),
-        ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("extract-target", "Hedef tablo ve şema kuralı"),
+        ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("extract-target", "Hedef tablo ve şema kuralı"), ("storage", "Hedef tablo yapısı: rowstore veya columnstore"),
         ("load-modes", "Yükleme modları"), ("partitioning", "Günlük bölümleme"), ("retention", "Saklama süresi (retention)"),
         ("export", "Export'lar"), ("destinations", "Export hedefleri (GCS, S3, Azure)"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
         ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"), ("transfer", "Job'ları dışa / içe aktarmak"),

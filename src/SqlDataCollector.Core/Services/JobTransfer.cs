@@ -72,6 +72,7 @@ public sealed class ExtractJobSpec
     public bool MergeDeleteMissing { get; set; }
     public SchemaPolicy SchemaPolicy { get; set; } = SchemaPolicy.Strict;
     public bool PartitionDaily { get; set; }
+    public TargetStorage TargetStorage { get; set; } = TargetStorage.Rowstore;
     public bool ReplaceRebuild { get; set; }
     public string TargetServer { get; set; } = "";
     public string TargetDatabase { get; set; } = "";
@@ -403,7 +404,7 @@ public sealed class JobTransferService(MetadataRepository repo, SystemSettingsSe
         SourceSchema = j.SourceSchema, SourceTable = j.SourceTable, ColumnList = j.ColumnList, FilterClause = j.FilterClause,
         SourceQuery = j.SourceQuery, UseNoLock = j.UseNoLock, ReadSnapshot = j.ReadSnapshot, LoadMode = j.LoadMode,
         WatermarkColumn = j.WatermarkColumn, KeyColumns = j.KeyColumns, MergeDeleteMissing = j.MergeDeleteMissing,
-        SchemaPolicy = j.SchemaPolicy, PartitionDaily = j.PartitionDaily, ReplaceRebuild = j.ReplaceRebuild,
+        SchemaPolicy = j.SchemaPolicy, PartitionDaily = j.PartitionDaily, TargetStorage = j.TargetStorage, ReplaceRebuild = j.ReplaceRebuild,
         TargetServer = j.TargetServerName, TargetDatabase = j.TargetDatabase, TargetSchema = j.TargetSchema, TargetTable = j.TargetTable,
         TriggerMode = j.TriggerMode, CronExpression = j.CronExpression, TimeZoneId = j.TimeZoneId, RetentionDays = j.RetentionDays,
         CommandTimeoutSec = j.CommandTimeoutSec, BatchSize = j.BatchSize, FreshnessHours = j.FreshnessHours,
@@ -490,6 +491,7 @@ public sealed class JobTransferService(MetadataRepository repo, SystemSettingsSe
             if (!Enum.IsDefined(def.SourceType)) errs.Add($"Unknown source type '{def.SourceType}'.");
             if (!Enum.IsDefined(def.LoadMode)) errs.Add($"Unknown load mode '{def.LoadMode}'.");
             if (!Enum.IsDefined(def.SchemaPolicy)) errs.Add($"Unknown schema policy '{def.SchemaPolicy}'.");
+            if (!Enum.IsDefined(def.TargetStorage)) errs.Add($"Unknown target storage '{def.TargetStorage}'.");
             if (Server(spec.SourceServer) is { } src) { def.SourceServerId = src.SqlServerId; def.SourceServerName = src.Name; }
             else errs.Add($"Source server '{spec.SourceServer}' does not exist here: map it to a server.");
             if (Server(spec.TargetServer) is { } tgt) { def.TargetServerId = tgt.SqlServerId; def.TargetServerName = tgt.Name; }
@@ -624,7 +626,7 @@ public sealed class JobTransferService(MetadataRepository repo, SystemSettingsSe
         SourceTable = s.SourceTable, ColumnList = s.ColumnList, FilterClause = s.FilterClause, SourceQuery = s.SourceQuery,
         UseNoLock = s.UseNoLock, ReadSnapshot = s.ReadSnapshot, LoadMode = s.LoadMode, WatermarkColumn = s.WatermarkColumn,
         KeyColumns = s.KeyColumns, MergeDeleteMissing = s.MergeDeleteMissing, SchemaPolicy = s.SchemaPolicy,
-        PartitionDaily = s.PartitionDaily, ReplaceRebuild = s.ReplaceRebuild, TargetDatabase = s.TargetDatabase ?? "",
+        PartitionDaily = s.PartitionDaily, TargetStorage = s.TargetStorage, ReplaceRebuild = s.ReplaceRebuild, TargetDatabase = s.TargetDatabase ?? "",
         TargetSchema = s.TargetSchema ?? "", TargetTable = s.TargetTable ?? "", TriggerMode = s.TriggerMode,
         CronExpression = s.CronExpression ?? "", TimeZoneId = s.TimeZoneId ?? "", RetentionDays = s.RetentionDays,
         CommandTimeoutSec = s.CommandTimeoutSec, BatchSize = s.BatchSize, FreshnessHours = s.FreshnessHours, NotifyEmails = s.NotifyEmails

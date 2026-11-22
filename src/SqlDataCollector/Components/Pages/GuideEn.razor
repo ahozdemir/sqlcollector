@@ -82,6 +82,8 @@
             <GuideFigure Src="guide/merge-load.png" Caption="Merge: the key (PK) is suggested; unchanged rows are not touched." />
         </li>
         <li>For busy sources enable <b>Read a consistent snapshot</b> in <b>1 · Source</b> (the DBA allows it once; the form shows the state).</li>
+        <li>For tables with many millions of rows choose <b>Storage: Columnstore</b> in <b>2 · Target</b> before the first run: loads are about four times faster
+            and the table is much smaller. It applies when the table is created.</li>
     </ol>
     <div class="alert alert-info"><b>Recommended.</b> A <code>rowversion</code> column is the best watermark: it does not miss transactions committed late. A modification time column is fine in most cases.</div>
     <div class="alert alert-warning"><b>Watch out.</b> The key must identify one row. If the source returns a key twice, the job stops and leaves the target unchanged – on purpose.

@@ -18,7 +18,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
     private const string ExtractSelect = """
         SELECT j.ExtractJobId, j.Name, j.SourceServerId, ss.Name AS SourceServerName, j.SourceDatabase,
                j.SourceType, j.SourceSchema, j.SourceTable, j.ColumnList, j.FilterClause, j.SourceQuery, j.UseNoLock, j.ReadSnapshot,
-               j.LoadMode, j.WatermarkColumn, j.SchemaPolicy, j.PartitionDaily, j.TargetServerId, ts.Name AS TargetServerName, j.TargetDatabase,
+               j.LoadMode, j.WatermarkColumn, j.SchemaPolicy, j.PartitionDaily, j.TargetStorage, j.TargetServerId, ts.Name AS TargetServerName, j.TargetDatabase,
                j.TargetSchema, j.TargetTable, j.CronExpression, j.TimeZoneId, j.RetentionDays, j.CommandTimeoutSec,
                j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.KeyColumns, j.MergeDeleteMissing, j.FreshnessHours, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
         FROM etl.ExtractJob j
@@ -187,11 +187,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             j.CreatedBy = user;
             j.ExtractJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExtractJob (Name, SourceServerId, SourceDatabase, SourceType, SourceSchema, SourceTable, ColumnList, FilterClause,
-                    SourceQuery, UseNoLock, ReadSnapshot, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
+                    SourceQuery, UseNoLock, ReadSnapshot, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetStorage, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
                     CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, KeyColumns, MergeDeleteMissing, FreshnessHours, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExtractJobId
                 VALUES (@Name, @SourceServerId, @SourceDatabase, @SourceType, @SourceSchema, @SourceTable, @ColumnList, @FilterClause,
-                    @SourceQuery, @UseNoLock, @ReadSnapshot, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
+                    @SourceQuery, @UseNoLock, @ReadSnapshot, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetStorage, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
                     @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @KeyColumns, @MergeDeleteMissing, @FreshnessHours, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, j);
         }
@@ -201,7 +201,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                 UPDATE etl.ExtractJob SET Name = @Name, SourceServerId = @SourceServerId, SourceDatabase = @SourceDatabase,
                     SourceType = @SourceType, SourceSchema = @SourceSchema, SourceTable = @SourceTable, ColumnList = @ColumnList,
                     FilterClause = @FilterClause, SourceQuery = @SourceQuery, UseNoLock = @UseNoLock, ReadSnapshot = @ReadSnapshot, LoadMode = @LoadMode,
-                    WatermarkColumn = @WatermarkColumn, SchemaPolicy = @SchemaPolicy, PartitionDaily = @PartitionDaily, TargetServerId = @TargetServerId, TargetDatabase = @TargetDatabase,
+                    WatermarkColumn = @WatermarkColumn, SchemaPolicy = @SchemaPolicy, PartitionDaily = @PartitionDaily, TargetStorage = @TargetStorage, TargetServerId = @TargetServerId, TargetDatabase = @TargetDatabase,
                     TargetSchema = @TargetSchema, TargetTable = @TargetTable, CronExpression = @CronExpression, TimeZoneId = @TimeZoneId,
                     RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, KeyColumns = @KeyColumns, MergeDeleteMissing = @MergeDeleteMissing, FreshnessHours = @FreshnessHours, TriggerMode = @TriggerMode, IsActive = @IsActive,
                     ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()

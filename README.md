@@ -79,6 +79,10 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 - **Check target** compares the source result schema with the target table column by column before saving
 - Optional **daily partitioning** on `_LoadedAt` (UTC): retention drops whole days with `TRUNCATE … WITH (PARTITIONS)`;
   future partitions are created automatically
+- **Target storage** per job: *Rowstore* (clustered index + two nonclustered indexes, default) or *Columnstore* (one
+  clustered columnstore index; bulk loads go straight into compressed rowgroups). Measured on 450,000 rows: rowstore with
+  PAGE compression 18.4 s, columnstore 4.3 s – and much smaller tables. Works with every load mode and daily partitions;
+  no xml/sql_variant columns; applies when the table is created (existing tables keep their layout)
 - Technical columns on every target table: `_LoadId`, `_LoadedAt`, `_ExtractJobId`, `_SourceServer`
 - Failed loads are rolled back; loads interrupted by a crash are cleaned up by the next sync
 - decimal(38,x) values are transferred exactly (`SqlDecimal`)
