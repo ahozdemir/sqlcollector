@@ -114,6 +114,24 @@
                     <div class="col-md-3 d-flex align-items-end">
                         <div class="form-check small"><input class="form-check-input" type="checkbox" id="nl" @bind="job.UseNoLock" disabled="@job.ReadSnapshot" /><label class="form-check-label" for="nl" title="Dirty reads: rows can be skipped or read twice while the source changes">WITH (NOLOCK)</label></div>
                     </div>
+                    <div class="col-md-4">
+                        <label class="form-label small sdc-nowrap">Parallel readers <HelpLink Topic="parallel-reads" Title="Parallel reads" /></label>
+                        <select class="form-select form-select-sm" @bind="job.ReadParallelism" disabled="@job.ReadSnapshot" aria-label="Parallel readers">
+                            @foreach (var n in ReaderChoices) { <option value="@n">@(n == 1 ? "1 – one reader" : $"{n} readers")</option> }
+                        </select>
+                    </div>
+                    @if (job.ReadParallelism > 1)
+                    {
+                        <div class="col-md-8">
+                            <label class="form-label small">Split column</label>
+                            <select class="form-select form-select-sm mono" @bind="job.SplitColumn" aria-label="Split column">
+                                <option value="">(leading column of the clustered index / primary key)</option>
+                                @foreach (var c in SplitCandidates) { <option value="@c.Name">@c.Name (@c.TypeDeclaration)</option> }
+                            </select>
+                        </div>
+                        <div class="col-12 form-text mt-0">Each reader reads one slice of the split column's value range over its own connection. The rows still go to the
+                            target in one stream, so a failed run rolls back completely. Use an indexed integer or date column; not with a consistent snapshot.</div>
+                    }
                 </div>
             }
             else
@@ -270,7 +288,7 @@
                     </select>
                 </div>
                 <div class="col-md-4">
-                    @if (job.LoadMode is LoadMode.Incremental or LoadMode.Merge)
+                    @if (job.LoadMode == LoadMode.Incremental || (job.LoadMode == LoadMode.Merge && !job.UseChangeTracking))
                     {
                         <label class="form-label small sdc-nowrap">@(job.LoadMode == LoadMode.Merge ? "Watermark column (optional)" : "Watermark column")</label>
                         @if (WatermarkCandidates.Count > 0)
@@ -325,9 +343,61 @@
                     <label class="form-label small">Timeout (s)</label>
                     <input type="number" min="30" class="form-control form-control-sm" @bind="job.CommandTimeoutSec" />
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label small sdc-nowrap">Parallel writers <HelpLink Topic="parallel-writes" Title="Parallel writes" /></label>
+                    @if (job.LoadMode == LoadMode.Merge)
+                    {
+                        <input class="form-control form-control-sm" value="1 – Merge" disabled aria-label="Parallel writers" />
+                    }
+                    else
+                    {
+                        <select class="form-select form-select-sm" @bind="job.WriteParallelism" aria-label="Parallel writers">
+                            @foreach (var n in WriterChoices) { <option value="@n">@(n == 1 ? "1 – one writer" : $"{n} writers")</option> }
+                        </select>
+                    }
+                </div>
+                @if (job.WriteParallelism > 1 && job.LoadMode != LoadMode.Merge)
+                {
+                    <div class="col-12 form-text mt-0">Rows are written over @job.WriteParallelism connections at once; best for columnstore targets and large loads.
+                        A failed run is still removed completely (all rows of a load share one _LoadId).</div>
+                }
             </div>
             @if (job.LoadMode == LoadMode.Merge)
             {
+                @if (job.SourceType == SourceType.Table)
+                {
+                    <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox" id="ct" @bind="job.UseChangeTracking" @bind:after="ChangeTrackingChangedAsync" />
+                        <label class="form-check-label small" for="ct">Read only the changes recorded by SQL Server Change Tracking <HelpLink Topic="change-tracking" Title="Change Tracking" /></label>
+                        <div class="form-text">
+                            @if (job.UseChangeTracking)
+                            {
+                                <span>Keys = the primary key. The first run reads the whole table; later runs read only the keys changed since the last run:
+                                    changed rows are updated, new ones inserted, deleted ones deleted.</span>
+                                @if (ctStatus is { DatabaseRetention: null })
+                                {
+                                    <br /><span class="text-danger">Not enabled in @job.SourceDatabase – the DBA runs once:
+                                        <span class="mono">ALTER DATABASE [@job.SourceDatabase] SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON);</span></span>
+                                }
+                                else if (ctStatus is { TableTracked: false })
+                                {
+                                    <br /><span class="text-danger">Not enabled for this table, or not visible to the service account – the DBA runs:
+                                        <span class="mono">ALTER TABLE @(SqlIdent.Quote(job.SourceSchema ?? "dbo", job.SourceTable ?? "")) ENABLE CHANGE_TRACKING;</span>
+                                        and grants VIEW CHANGE TRACKING on it.</span>
+                                }
+                                else if (ctStatus is { } st)
+                                {
+                                    <br /><span class="text-success">Tracked; changes are kept @st.DatabaseRetention.</span>
+                                    <span>Run at least that often – after a longer pause the next run reads the whole table again.</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>Reads only the changed rows instead of the whole table and also sees deletes, without a watermark column. Needs change tracking on the source table.</span>
+                            }
+                        </div>
+                    </div>
+                }
                 <div class="mt-3">
                     <label class="form-label small mb-1">Key columns – identify one row <HelpLink Topic="merge" Title="Merge (upsert)" /></label>
                     @if (KeyCandidates.Count > 0)
@@ -338,7 +408,7 @@
                                 var id = "key-" + c.Name;
                                 <div class="form-check mb-0" @key="c.Name">
                                     <input class="form-check-input" type="checkbox" id="@id" checked="@MergeKeys.Contains(c.Name, StringComparer.OrdinalIgnoreCase)"
-                                           @onchange="e => ToggleKey(c.Name, e.Value is true)" />
+                                           @onchange="e => ToggleKey(c.Name, e.Value is true)" disabled="@job.UseChangeTracking" />
                                     <label class="form-check-label small mono" for="@id">@c.Name @if (c.KeyOrdinal > 0) { <span class="badge bg-light text-dark border">PK</span> }</label>
                                 </div>
                             }
@@ -346,12 +416,14 @@
                     }
                     else
                     {
-                        <input class="form-control form-control-sm mono" @bind="job.KeyColumns" placeholder="CustomerId (comma separated; run Preview to pick from the result columns)" />
+                        <input class="form-control form-control-sm mono" @bind="job.KeyColumns" disabled="@job.UseChangeTracking" placeholder="CustomerId (comma separated; run Preview to pick from the result columns)" />
                     }
                     <div class="form-text">
                         Selected: <span class="mono">@(MergeKeys.Count == 0 ? "none" : string.Join(", ", MergeKeys))</span>.
                         Changed rows are updated and new keys inserted in one transaction; unchanged rows are not touched (incremental exports only send what changed).
                     </div>
+                    @if (!job.UseChangeTracking)
+                    {
                     <div class="form-check mt-2">
                         <input class="form-check-input" type="checkbox" id="mergeDelete" @bind="job.MergeDeleteMissing" disabled="@(!string.IsNullOrWhiteSpace(job.WatermarkColumn))" />
                         <label class="form-check-label small" for="mergeDelete">Delete rows whose key the source no longer returns</label>
@@ -359,9 +431,16 @@
                             ? "Needs the full read (no watermark). A run that reads no rows at all never deletes."
                             : "Not available with a watermark column: an incremental read only returns changed rows.")</div>
                     </div>
+                    }
                 </div>
             }
-            @if (!IsNew && job.UsesWatermark())
+            @if (!IsNew && job.UsesChangeTracking())
+            {
+                <div class="small mt-2">Change tracking version: <span class="mono">@(ChangeTrackingSql.StoredVersion(state)?.ToString() ?? "(none – the next run reads the whole table)")</span>
+                    @if (canEdit && state?.WatermarkValue is not null) { <button class="btn btn-link btn-sm text-danger p-0 ms-2" @onclick="ResetWatermarkAsync">reset</button> }
+                </div>
+            }
+            else if (!IsNew && job.UsesWatermark())
             {
                 <div class="small mt-2">Current watermark: <span class="mono">@(state?.WatermarkValue ?? "(none – the first run reads everything)")</span>
                     @if (canEdit && state?.WatermarkValue is not null) { <button class="btn btn-link btn-sm text-danger p-0 ms-2" @onclick="ResetWatermarkAsync">reset</button> }
@@ -509,17 +588,44 @@
 
     private void LoadModeChanged() => SuggestPrimaryKey();
 
+    // ---------------- parallel reads and change tracking ----------------
+    private IEnumerable<int> ReaderChoices => new[] { 1, 2, 4, 8, 16 }.Append(job.ReadParallelism)
+        .Where(n => n is >= 1 and <= ExtractJobRules.MaxReadParallelism).Distinct().Order();
+    private IEnumerable<int> WriterChoices => new[] { 1, 2, 4, 8 }.Append(job.WriteParallelism)
+        .Where(n => n is >= 1 and <= ExtractJobRules.MaxWriteParallelism).Distinct().Order();
+    private IReadOnlyList<ColumnInfo> SplitCandidates =>
+        columns.Where(c => SourceSplitter.SplitTypes.Contains(c.TypeDeclaration.Split('(')[0].Trim())).ToList();
+
+    private ChangeTrackingStatus? ctStatus;
+
+    private async Task ChangeTrackingChangedAsync()
+    {
+        if (job.UseChangeTracking) { job.WatermarkColumn = null; job.MergeDeleteMissing = false; }
+        SuggestPrimaryKey();
+        await LoadChangeTrackingStatusAsync();
+    }
+
+    private async Task LoadChangeTrackingStatusAsync()
+    {
+        ctStatus = null;
+        if (!job.UseChangeTracking || job.SourceType != SourceType.Table || job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase) || job.SourceTable is null) return;
+        try { ctStatus = await Catalog.ChangeTrackingStatusAsync(job.SourceServerId, job.SourceDatabase, job.SourceSchema ?? "dbo", job.SourceTable); }
+        catch { ctStatus = null; }   // the hint is optional; a run reports the exact problem
+    }
+
     private bool? snapshotAllowed;
     private async Task SnapshotChangedAsync()
     {
         snapshotAllowed = null;
+        if (job.ReadSnapshot) job.ReadParallelism = 1;   // parallel readers cannot share one point in time
         if (!job.ReadSnapshot || job.SourceServerId == 0 || string.IsNullOrEmpty(job.SourceDatabase)) return;
         try { snapshotAllowed = await Catalog.SnapshotAllowedAsync(job.SourceServerId, job.SourceDatabase); } catch { snapshotAllowed = null; }
     }
 
     private void SuggestPrimaryKey()
     {
-        if (job.LoadMode != LoadMode.Merge || MergeKeys.Count > 0) return;
+        // change tracking always uses the primary key; otherwise it is only a suggestion for an empty key list
+        if (job.LoadMode != LoadMode.Merge || (MergeKeys.Count > 0 && !job.UseChangeTracking)) return;
         var pk = columns.Where(c => c.KeyOrdinal > 0).OrderBy(c => c.KeyOrdinal).Select(c => c.Name).ToList();
         if (job.SourceType == SourceType.Table && pk.Count > 0) job.KeyColumns = string.Join(", ", pk);
     }
@@ -574,6 +680,7 @@
                     selectedTables.Add($"{job.SourceSchema ?? "dbo"}.{job.SourceTable}");
                     await LoadTablesAsync();
                     await LoadColumnsAsync(job.SourceSchema ?? "dbo", job.SourceTable, applyColumnList: true);
+                    await LoadChangeTrackingStatusAsync();
                 }
             }
         }
@@ -644,6 +751,7 @@
             if (string.IsNullOrWhiteSpace(job.TargetTable) || IsNew) job.TargetTable = only.Name;
             if (IsNew) job.Name = $"{job.SourceDatabase}_{only.Schema}_{only.Name}";
             await LoadColumnsAsync(only.Schema, only.Name, applyColumnList: false);
+            await LoadChangeTrackingStatusAsync();
         }
         else
         {
@@ -791,6 +899,7 @@
                 {
                     var j = Clone(job);
                     j.ExtractJobId = 0; j.SourceSchema = t.Schema; j.SourceTable = t.Name; j.ColumnList = null;
+                    j.SplitColumn = null;   // each table splits on its own clustered index / primary key
                     j.TargetTable = TargetFor(t);
                     j.TargetStorage = storages[t.Key];
                     j.Name = string.IsNullOrWhiteSpace(job.Name) ? $"{job.SourceDatabase}_{t.Schema}_{t.Name}" : $"{job.Name.Trim()}_{j.TargetTable}";
@@ -843,6 +952,8 @@
         if (job.SourceType == SourceType.Query && string.IsNullOrWhiteSpace(job.SourceQuery)) errs.Add("The query cannot be empty.");
         if (job.SourceType == SourceType.Table && !advancedColumns && selectedTables.Count == 1 && selectedColumns.Count == 0) errs.Add("Select at least one column.");
         if (job.LoadMode == LoadMode.Incremental && string.IsNullOrWhiteSpace(job.WatermarkColumn)) errs.Add("Choose a watermark column for Incremental mode.");
+        JobDefinitionRules.ValidateReadOptions(job, errs);
+        if (job.UseChangeTracking && columns.Count > 0 && !columns.Any(c => c.KeyOrdinal > 0)) errs.Add("Change tracking needs a primary key on the source table.");
         if (job.LoadMode == LoadMode.Incremental && MultiTable) errs.Add("Incremental cannot be used with multiple tables (each table has its own watermark column). Choose Append/Replace or create the jobs one by one.");
         if (job.LoadMode == LoadMode.Merge)
         {

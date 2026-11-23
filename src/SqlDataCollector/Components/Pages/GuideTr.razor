@@ -69,6 +69,7 @@
     <table class="table table-sm table-bordered bg-white">
         <thead class="table-light"><tr><th>İhtiyaç</th><th>Mod</th></tr></thead>
         <tbody>
+            <tr><td>Her kaydın <b>güncel hâli</b>, kaynak tabloda change tracking açık</td><td><b>Merge</b> + <b>Change Tracking</b> (değişenler ve silinenler, watermark gerekmez)</td></tr>
             <tr><td>Her kaydın <b>güncel hâli</b>, kaydın değişiklik zamanı kolonu var</td><td><b>Merge</b> + watermark (<code>ModifiedAt</code>)</td></tr>
             <tr><td>Her kaydın güncel hâli, değişiklik kolonu yok, silinenler de silinsin</td><td><b>Merge</b>, tam okuma + "Delete rows whose key the source no longer returns"</td></tr>
             <tr><td>Her değişikliğin <b>geçmişi</b> (bir kayıt birden çok kez)</td><td><b>Incremental</b> + watermark</td></tr>
@@ -77,18 +78,25 @@
     <h3>Adımlar (Merge)</h3>
     <ol>
         <li><b>3 · Load</b> bölümünde <b>Load mode</b> olarak <b>Merge</b>'ü seçin. Kaynak tablonun birincil anahtarı <b>Key columns</b>'ta otomatik işaretlenir.</li>
-        <li>Değişiklik zamanı kolonu varsa <b>Watermark column</b>'da seçin; her gece yalnızca son okumadan sonra değişen satırlar okunur.</li>
+        <li>DBA tabloda change tracking'i açtıysa <b>Read only the changes recorded by SQL Server Change Tracking</b>'i işaretleyin: her çalıştırma yalnızca değişen satırları
+            okur, kaynakta silinenleri hedefte de siler. Form izlemenin açık olup olmadığını gösterir. Açık değilse ve değişiklik zamanı kolonu varsa onu <b>Watermark column</b>'da
+            seçin; her gece yalnızca son okumadan sonra değişen satırlar okunur.</li>
         <li>Kaynakta satırlar fiziksel olarak siliniyor ve hedefte de silinmesini istiyorsanız watermark'ı boş bırakıp "Delete rows whose key the source no longer returns"u işaretleyin.
             <GuideFigure Src="guide/merge-load.png" Caption="Merge: anahtar kolon (PK) otomatik önerilir; değişmeyen satırlara dokunulmaz." />
         </li>
         <li>İşlemlerin sürdüğü kaynaklarda <b>1 · Source</b> bölümünde <b>Read a consistent snapshot</b>'ı açın (DBA'nın bir kez izin vermesi gerekir; form durumu gösterir).</li>
         <li>Milyonlarca satırlık tablolarda ilk çalıştırmadan önce <b>2 · Target</b> bölümünde <b>Storage: Columnstore</b> seçin: yükleme yaklaşık dört kat hızlanır, tablo da çok daha az yer kaplar. Seçenek tablo oluşturulurken geçerlidir.</li>
+        <li>Kaynaktan okuma yavaşsa (uzak veya yoğun sunucu) <b>1 · Source</b> bölümünde <b>Parallel readers: 4</b> seçin: tablo birincil anahtarına göre bölünüp dört bağlantıyla
+            okunur. Change tracking job'larının tam okumaları da bunu kullanır. Yavaş olan hedefe yazmaksa (columnstore tabloya milyonlarca satır), <b>3 · Load</b>
+            bölümünde <b>Parallel writers: 4</b> seçin (Merge'de kullanılmaz).</li>
     </ol>
-    <div class="alert alert-info"><b>Öneri.</b> Mümkünse watermark olarak <code>rowversion</code> kolonu kullanın: geç kaydedilen işlemleri de kaçırmaz. Saat kolonları (ModifiedAt) çoğu durumda yeterlidir.</div>
+    <div class="alert alert-info"><b>Öneri.</b> Yalnızca değişiklikleri okumanın en güvenilir yolu change tracking'dir: silinenleri de görür, geç kaydedilen işlemleri kaçırmaz.
+        Yoksa watermark olarak <code>rowversion</code> kolonu en iyisidir; saat kolonları (ModifiedAt) çoğu durumda yeterlidir. Change tracking job'ını değişiklik saklama
+        süresinden (örn. 7 gün) sık çalıştırın; yoksa bir sonraki çalıştırma bütün tabloyu yeniden okur.</div>
     <div class="alert alert-warning"><b>Dikkat.</b> Anahtar kolon gerçekten tek satırı tanımlamalıdır. Kaynakta aynı anahtar iki kez gelirse job durur ve hedefe dokunmaz – veri bozulmasın diye.
         <b>WITH (NOLOCK)</b> büyük ve yoğun tablolarda satır atlayabilir veya iki kez okuyabilir; onun yerine snapshot kullanın.</div>
     <p><b>Nasıl kontrol ederim?</b> <b>Run history</b>'de Merge job'ları <code>merge: +eklenen ~güncellenen -silinen</code> olarak görünür.</p>
-    <p class="small">Başvuru: <a href="/help#merge">Merge</a> · <a href="/help#load-modes">Yükleme modları</a> · <a href="/help#consistency">Bütünlük ve tutarlı okuma</a></p>
+    <p class="small">Başvuru: <a href="/help#merge">Merge</a> · <a href="/help#change-tracking">Change Tracking</a> · <a href="/help#parallel-reads">Paralel okuma</a> · <a href="/help#parallel-writes">Paralel yazma</a> · <a href="/help#load-modes">Yükleme modları</a> · <a href="/help#consistency">Bütünlük ve tutarlı okuma</a></p>
 </section>
 
 <section id="nightly-export">

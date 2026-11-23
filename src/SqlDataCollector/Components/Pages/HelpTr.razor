@@ -139,6 +139,40 @@
     <p>Listede yalnızca kullanma yetkiniz olan sunucu ve veritabanları görünür.</p>
 </section>
 
+<section id="parallel-reads">
+    <h2>Paralel okuma</h2>
+    <p>Büyük bir tablo aynı anda birkaç bağlantıyla okunabilir: <i>1 · Source</i> bölümündeki <b>Parallel readers</b> (2, 4, 8 veya 16; yalnızca tablo ve view).</p>
+    <ul>
+        <li><b>Nasıl çalışır:</b> job önce <b>split column</b>'un (bölme kolonu) en küçük ve en büyük değerini ölçer, aralığı eşit dilimlere böler ve her dilimi ayrı bir
+            bağlantıyla okur. İlk dilim NULL değerleri de alır, son dilim en büyük değerin üstünü de; okuma sırasında eklenen satırlar kaybolmaz.</li>
+        <li><b>Split column:</b> boş bırakılırsa clustered index'in (yoksa birincil anahtarın) ilk kolonu kullanılır. Tam sayı ve tarih kolonları seçilebilir.
+            İndeksli bir kolon seçin; her okuyucu indeksin yalnızca kendi parçasını okur. İndeksi olmayan tablo (heap) ve view için kolonu siz seçmelisiniz.</li>
+        <li><b>Hedefe tek akış:</b> okuyucular satırları tek bir yazıcıya verir. Bu yüzden geri kalan her şey aynıdır: tek yükleme, satır sayısı kontrolü, watermark,
+            Merge ve hata olursa geri alma. Bir okuyucu hata alırsa diğerleri durdurulur ve yazılan satırlar silinir.</li>
+        <li><b>Ne zaman işe yarar:</b> yavaş olan kaynaktan okumaksa (uzak veya yoğun sunucu, geniş satırlar, tarama yapan filtre). 4 ile başlayın; her okuyucu kaynakta bir
+            sorgu daha demektir. Hedefe yazma yine tek akıştır; yazmayı hızlandırmak için <a href="/help#storage">Columnstore</a> kullanın.</li>
+        <li><b>Dengesiz değerler:</b> dilimler değere göre eşittir, satır sayısına göre değil. Değerleri çok dengesiz bir kolon (örn. satırların çoğu son ayda) eşit olmayan
+            dilimler verir; başka bir kolon ya da daha az okuyucu seçin.</li>
+        <li><b>Sınırlar:</b> <b>Read a consistent snapshot</b> ile birlikte kullanılamaz (her okuyucu farklı bir anı görürdü). Boş tablo ve okuyucu sayısından az değeri olan
+            aralık tek okuyucuyla okunur; SQL sorgusu/prosedür kaynakları her zaman tek okuyucu kullanır.</li>
+    </ul>
+</section>
+
+<section id="parallel-writes">
+    <h2>Paralel yazma</h2>
+    <p><i>3 · Load</i> bölümündeki <b>Parallel writers</b> (2, 4 veya 8) satırları hedefe aynı anda birkaç bağlantıyla yazar. Satırlar tek okuyucudan (veya
+       <a href="/help#parallel-reads">paralel okuyuculardan</a>) gelir ve 1.000'lik paketler hâlinde yazıcılara dağıtılır.</p>
+    <ul>
+        <li><b>Ne zaman işe yarar:</b> yavaş olan hedefe yazmaksa. En çok büyük yüklemelerde ve <a href="/help#storage">Columnstore</a> tablolarda: her yazıcı kendi
+            satır gruplarını ayrı bir işlemci çekirdeğinde sıkıştırır. Rowstore tablolarda kazanç daha azdır.</li>
+        <li><b>Yine tek yükleme:</b> bütün satırlar aynı <code>_LoadId</code>'yi taşır; satır sayısı kontrolü, watermark, saklama süresi ve hata olursa geri alma aynen çalışır.
+            Bir yazıcı hata alırsa diğerleri durdurulur ve o çalıştırmanın bütün satırları silinir.</li>
+        <li><b>Çalıştığı yerler:</b> Append, Replace (rebuild dahil), Incremental, günlük bölümleme ve bütün kaynak tipleri (SQL sorgusu ve prosedür dahil).</li>
+        <li><b>Merge'de kullanılmaz:</b> Merge satırları tek oturuma ait geçici bir tabloda topladığı için her zaman tek yazıcıyla çalışır.</li>
+        <li>Her yazıcı hedefte bir bağlantı ve bir işlemci çekirdeği daha demektir: 4 ile başlayın. Az satırlı yüklemelerde fayda sağlamaz; milyonlarca satır için kullanın.</li>
+    </ul>
+</section>
+
 <section id="extract-target">
     <h2>Hedef tablo ve şema kuralı</h2>
     <p><b>Target schema</b> kaynak veritabanı adından otomatik dolar (<code>ERP</code> → <code>erp</code>). Her kaynağın ayrı şemada durması, farklı kaynaklardaki aynı adlı tabloların
@@ -182,7 +216,7 @@
             <tr><td><b>Append</b></td><td>Okunan bütün satırlar eklenir; eski yüklemeler saklama süresi dolana kadar durur.</td><td>Günlük fotoğraf, geçmiş takibi</td></tr>
             <tr><td><b>Replace</b></td><td>Bütün tablo yeniden yüklenir; başarılı olunca eski yükleme silinir.</td><td>Küçük referans tabloları</td></tr>
             <tr><td><b>Incremental</b></td><td>Yalnızca son çalıştırmadan beri değişen satırlar okunur (watermark kolonuna göre) ve eklenir.</td><td>Büyük, sürekli büyüyen tablolar</td></tr>
-            <tr><td><b>Merge</b></td><td>Anahtar kolona göre: değişen satır güncellenir, yeni satır eklenir. Her anahtar için tek satır kalır.</td><td>Müşteri, ürün, durumu değişen siparişler</td></tr>
+            <tr><td><b>Merge</b></td><td>Anahtar kolona göre: değişen satır güncellenir, yeni satır eklenir. Her anahtar için tek satır kalır. <a href="/help#change-tracking">Change Tracking</a> ile yalnızca değişenler okunur.</td><td>Müşteri, ürün, durumu değişen siparişler</td></tr>
         </tbody>
     </table>
     <h3>Replace: sil veya yeniden kur</h3>
@@ -197,6 +231,21 @@
         <li>Değişmeyen satırlara dokunulmaz. Bu yüzden export'lar yalnızca gerçekten değişen satırları gönderir (örn. 5.000 müşteriden 25'i değiştiyse 25 satır).</li>
         <li><b>Delete rows whose key the source no longer returns:</b> kaynakta silinen satırları hedefte de siler. Kaynak hiç satır döndürmezse güvenlik için silme yapılmaz.</li>
         <li>Anahtar boş (NULL) ya da kaynakta iki kez geçiyorsa job durur ve hedefe dokunmaz. Run history'de <code>merge: +eklenen ~güncellenen -silinen</code> görünür.</li>
+    </ul>
+    <h3 id="change-tracking">Change Tracking (Merge)</h3>
+    <p><b>Read only the changes recorded by SQL Server Change Tracking</b> seçeneğiyle bir tablonun Merge job'ı yalnızca son çalıştırmadan beri değişen satırları okur.
+       Watermark kolonu gerekmez ve kaynakta silinen satırlar da hedefte silinir.</p>
+    <ul>
+        <li><b>Ön koşul (DBA, bir kez):</b> <code>ALTER DATABASE [ERP] SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON);</code>, her tablo için
+            <code>ALTER TABLE dbo.Orders ENABLE CHANGE_TRACKING;</code> ve servis hesabına <code>GRANT VIEW CHANGE TRACKING ON dbo.Orders</code>. Tablonun birincil anahtarı olmalıdır.
+            Form, izlemenin açık olup olmadığını ve değişikliklerin kaç gün tutulduğunu gösterir.</li>
+        <li><b>Anahtar</b> her zaman tablonun birincil anahtarıdır.</li>
+        <li><b>Her çalıştırmada:</b> değişen satırlar okunur; değişenler güncellenir, yeniler eklenir, silinenler (veya artık filtreye uymayanlar) hedeften silinir. Hepsi tek
+            adımda (transaction) olur. Job sayfasında <b>Change tracking version</b> son okunan noktayı gösterir.</li>
+        <li><b>Tam okuma:</b> ilk çalıştırma, <b>reset</b> sonrası ve job değişiklik saklama süresinden uzun süre çalışmadıysa bütün tablo okunur, kaynakta olmayan satırlar silinir.
+            Bu yüzden job'ı saklama süresinden sık çalıştırın.</li>
+        <li>Run history'de okunan satır = değişen satır sayısıdır; <code>merge: +eklenen ~güncellenen -silinen</code> görünür.</li>
+        <li>Kaynağa yükü düşüktür: SQL Server yalnızca değişen anahtarları not eder (CDC'den hafiftir), job yalnızca değişen satırları okur.</li>
     </ul>
     <h3>Watermark nedir?</h3>
     <p>Incremental ve Merge'de "en son nereye kadar okudum" bilgisidir. Genellikle <code>ModifiedAt</code> (değişiklik zamanı) veya <code>rowversion</code> kolonu kullanılır.

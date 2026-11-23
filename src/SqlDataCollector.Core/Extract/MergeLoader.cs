@@ -8,6 +8,7 @@ namespace SqlDataCollector.Extract;
 /// <summary>
 /// What a merge writes: target table, key columns, the other source columns (target names) and
 /// whether rows missing from the source are deleted. Columns not delivered by the source are never touched.
+/// DeleteKeys: Change Tracking – the keys staged in #sdc_delete (rows deleted in the source) are deleted first.
 /// </summary>
 public sealed record MergePlan(
     string Schema, string Table,
@@ -15,12 +16,25 @@ public sealed record MergePlan(
     IReadOnlyList<string> Columns,
     IReadOnlySet<string> XmlColumns,
     bool DeleteMissing,
-    int ExtractJobId);
+    int ExtractJobId,
+    bool DeleteKeys = false);
 
 /// <summary>SQL of the Merge load mode (pure string building; unit tested).</summary>
 public static class MergeSql
 {
     public const string Staging = "#sdc_merge";
+    public const string DeleteStaging = "#sdc_delete";
+
+    /// <summary>Empty session temp table with the target's key columns: the keys Change Tracking reports as deleted.</summary>
+    public static string CreateDeleteStaging(string schema, string table, IReadOnlyList<string> keys)
+    {
+        var full = SqlIdent.Quote(schema, table);
+        var cols = string.Join(", ", keys.Select(SqlIdent.Quote));
+        return $"""
+            IF OBJECT_ID(N'tempdb..{DeleteStaging}') IS NOT NULL DROP TABLE {DeleteStaging};
+            SELECT TOP (0) {cols} INTO {DeleteStaging} FROM {full} UNION ALL SELECT TOP (0) {cols} FROM {full};
+            """;
+    }
 
     /// <summary>Empty session temp table with the target's columns (UNION ALL drops an IDENTITY property).</summary>
     public static string CreateStaging(string schema, string table)
@@ -59,6 +73,15 @@ public static class MergeSql
         var tech = SqlIdent.TechnicalColumns;
 
         var sb = new StringBuilder("SET XACT_ABORT ON;\nDECLARE @ins bigint = 0, @upd bigint = 0, @del bigint = 0;\n");
+        if (p.DeleteKeys)
+        {
+            // first, so a key deleted and inserted again between the two source reads ends up present (the next run settles it anyway)
+            var keyJoin = string.Join(" AND ", p.Keys.Select(k => $"t.{Q(k)} = d.{Q(k)}"));
+            sb.AppendLine($"CREATE CLUSTERED INDEX CX_sdc_delete ON {DeleteStaging} ({string.Join(", ", p.Keys.Select(Q))});");
+            sb.AppendLine($"DELETE t FROM {t} AS t");
+            sb.AppendLine($"WHERE t.{Q(SqlIdent.ExtractJobIdColumn)} = @job AND EXISTS (SELECT 1 FROM {DeleteStaging} AS d WHERE {keyJoin});");
+            sb.AppendLine("SET @del = @@ROWCOUNT;");
+        }
         if (p.Columns.Count > 0)
         {
             var set = string.Join(", ", p.Columns.Concat(tech).Select(c => $"{Q(c)} = s.{Q(c)}"));
@@ -79,9 +102,10 @@ public static class MergeSql
         {
             sb.AppendLine($"DELETE t FROM {t} AS t");
             sb.AppendLine($"WHERE t.{Q(SqlIdent.ExtractJobIdColumn)} = @job AND NOT EXISTS (SELECT 1 FROM {Staging} AS s WHERE {join});");
-            sb.AppendLine("SET @del = @@ROWCOUNT;");
+            sb.AppendLine("SET @del = @del + @@ROWCOUNT;");
         }
         sb.AppendLine($"DROP TABLE {Staging};");
+        if (p.DeleteKeys) sb.AppendLine($"DROP TABLE {DeleteStaging};");
         sb.Append("SELECT @ins, @upd, @del;");
         return sb.ToString();
     }
@@ -95,6 +119,9 @@ public sealed class MergeLoader(ILogger<MergeLoader> logger)
 {
     public async Task CreateStagingAsync(SqlConnection conn, string schema, string table, CancellationToken ct) =>
         await ExecAsync(conn, null, MergeSql.CreateStaging(schema, table), ct);
+
+    public async Task CreateDeleteStagingAsync(SqlConnection conn, string schema, string table, IReadOnlyList<string> keys, CancellationToken ct) =>
+        await ExecAsync(conn, null, MergeSql.CreateDeleteStaging(schema, table, keys), ct);
 
     public async Task<IReadOnlySet<string>> GetXmlColumnsAsync(SqlConnection conn, string schema, string table, CancellationToken ct)
     {

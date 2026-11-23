@@ -117,6 +117,47 @@
             <p>Only servers and databases you are permitted to use are listed.</p>
         </section>
 
+        <section id="parallel-reads">
+            <h2>Parallel reads</h2>
+            <p>A large table can be read over several connections at once: <b>Parallel readers</b> in section <i>1 · Source</i> (2, 4, 8 or 16; tables and views only).</p>
+            <ul>
+                <li><b>How:</b> the job measures MIN and MAX of the <b>split column</b> (with the job's filter and watermark), divides the range into equal slices and reads
+                    each slice over its own connection (<code>WHERE Id &gt;= @@SliceFrom AND Id &lt; @@SliceTo</code>, parameters of the column's real type). The first slice also
+                    reads NULLs and everything below MIN, the last one everything above MAX, so rows added meanwhile are not lost.</li>
+                <li><b>Split column:</b> empty = the leading column of the clustered index (else of the primary key). Integer and date/time columns are allowed
+                    (tinyint, smallint, int, bigint, date, smalldatetime, datetime, datetime2). Choose an indexed column: each reader then reads only its part of the index.
+                    A heap or a view needs an explicit split column.</li>
+                <li><b>One stream into the target:</b> the readers hand their rows to one bulk copy, so everything else stays as it was: one load (<code>_LoadId</code>),
+                    the integrity count, the watermark, Merge staging and the roll-back of a failed run. If one reader fails, the others are stopped and the rows already
+                    written are removed.</li>
+                <li><b>When it helps:</b> when reading the source is the slow part – a remote or busy source, wide rows, a filter or watermark that scans. Start with 4;
+                    every reader is one more query on the source. The target is still written by one stream; for faster writes use <a href="/help#storage">Columnstore</a>.</li>
+                <li><b>Uneven values:</b> slices are equal by value, not by row count. A column with big gaps (e.g. most rows in the last month) gives uneven slices –
+                    choose another column or fewer readers.</li>
+                <li><b>Limits:</b> not combined with <i>Read a consistent snapshot</i> (each reader would see its own point in time). An empty table and a range with fewer
+                    values than readers are read with one reader; query/procedure sources always use one reader. With several tables selected, each job splits on its own
+                    clustered index or primary key.</li>
+            </ul>
+        </section>
+
+        <section id="parallel-writes">
+            <h2>Parallel writes</h2>
+            <p><b>Parallel writers</b> in section <i>3 · Load</i> (2, 4 or 8) write the rows into the target over several connections at once.
+               The rows come from one reader (or from the <a href="/help#parallel-reads">parallel readers</a>) and are dealt out in batches of 1,000 to the writers.</p>
+            <ul>
+                <li><b>When it helps:</b> when writing the target is the slow part – usually large loads into <a href="/help#storage">Columnstore</a> tables, where every
+                    writer compresses its own rowgroups on its own CPU core. Rowstore tables gain less: all writers insert at the end of the same index.</li>
+                <li><b>Still one load:</b> all rows carry the same <code>_LoadId</code>; the integrity count, the watermark, retention and the clean-up of a failed run work
+                    as before. If one writer fails, the others are stopped and every row of the run is removed again.</li>
+                <li><b>Works with</b> Append, Replace (also with rebuild – the writers load the new table without a table lock), Incremental, daily partitioning and every
+                    source type (query and procedure sources too).</li>
+                <li><b>Not for Merge:</b> a merge stages its rows in a temporary table of one session, so it always uses one writer.</li>
+                <li><b>Columnstore and small loads:</b> each writer fills its own rowgroups; with few rows per writer (below 102,400) they land in the delta store first
+                    and SQL Server compresses them later. Use parallel writers for loads of millions of rows.</li>
+                <li>Every writer is one more connection to the target and one more CPU core busy on it: start with 4.</li>
+            </ul>
+        </section>
+
         <section id="extract-target">
             <h2>Target table and schema policy</h2>
             <p><b>Target schema</b>: for a new job it is filled from the source database name (<code>ERP</code> → <code>erp</code>, <code>Sales DB</code> → <code>sales_db</code>)
@@ -179,7 +220,8 @@
                     <tr><td><b>Append</b></td><td>All selected rows are added. Older loads stay (until retention removes them).</td><td>Daily snapshots, history</td></tr>
                     <tr><td><b>Replace</b></td><td>All rows are loaded; after success the job's older loads are deleted.</td><td>Small reference tables</td></tr>
                     <tr><td><b>Incremental</b></td><td>Only rows with <code>watermark column &gt; last value</code> are read. The highest value read is stored after success.</td><td>Large tables with ModifiedAt / rowversion</td></tr>
-                    <tr><td><b>Merge</b></td><td>Upsert by <a href="/help#merge">key columns</a>: changed rows are updated, new keys inserted, optionally vanished keys deleted. The table holds one row per key (the current state).</td><td>Master data, orders with status changes, a current-state copy for exports</td></tr>
+                    <tr><td><b>Merge</b></td><td>Upsert by <a href="/help#merge">key columns</a>: changed rows are updated, new keys inserted, optionally vanished keys deleted. The table holds one row per key (the current state).
+                        With <a href="/help#change-tracking">change tracking</a> only the changed keys are read, deletes included.</td><td>Master data, orders with status changes, a current-state copy for exports</td></tr>
                 </tbody>
             </table>
             <h3>Replace: delete previous loads or rebuild and swap</h3>
@@ -198,13 +240,32 @@
                 <li>Choose the <b>key columns</b> that identify one row (the primary key of a source table is suggested). Each run bulk-loads the source rows into a temporary table,
                     checks them (no empty key, no key twice) and then applies them to the target in <b>one transaction</b>: rows whose values changed are updated, new keys are inserted.
                     Unchanged rows are not touched, so <code>_LoadId</code> only moves for rows that really changed and incremental exports send exactly the changes.</li>
-                <li><b>Full read or watermark:</b> without a watermark column every run reads the whole source; with one (e.g. <code>ModifiedAt</code>, rowversion) only changed rows are read.</li>
+                <li><b>Full read, watermark or change tracking:</b> without a watermark column every run reads the whole source; with one (e.g. <code>ModifiedAt</code>, rowversion) only changed rows are read;
+                    with <a href="/help#change-tracking">change tracking</a> only the changed keys, deletes included.</li>
                 <li><b>Delete rows whose key the source no longer returns</b> (optional, full read only): such rows are deleted from the target. A run that reads no rows at all never deletes,
                     so a broken source cannot empty the table. Deleted rows do not appear in exports.</li>
                 <li>The target table gets a unique index <code>UX_&lt;schema&gt;_&lt;table&gt;_Key</code> on the key on the first run (re-created when the key changes). A table that already contains a key twice
                     (e.g. from earlier Append loads) is refused with a clear message. Key columns of a <code>(max)</code> or xml type cannot be indexed: cast them in the query.</li>
                 <li>Only this job may write to the target table; daily partitioning and retention do not apply (the table is the current state of the source).</li>
                 <li>A failed run changes nothing (the transaction is rolled back) and needs no clean-up. The Run history shows <code>merge: +inserted ~updated -deleted</code>.</li>
+            </ul>
+            <h3 id="change-tracking">Change Tracking (Merge)</h3>
+            <p>With <b>Read only the changes recorded by SQL Server Change Tracking</b> a Merge job of a table reads only the keys changed since its last run –
+               no watermark column is needed, and deletes are seen too.</p>
+            <ul>
+                <li><b>Prerequisite (DBA, once):</b> <code>ALTER DATABASE [ERP] SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON);</code>, per table
+                    <code>ALTER TABLE dbo.Orders ENABLE CHANGE_TRACKING;</code> and <code>GRANT VIEW CHANGE TRACKING ON dbo.Orders TO [service account];</code>.
+                    The table needs a primary key. The form shows whether tracking is on and how long changes are kept.</li>
+                <li><b>Keys</b> are always the table's primary key.</li>
+                <li><b>Each run</b> first notes the current change tracking version, then reads the rows of the changed keys (with the job's columns and filter) and upserts
+                    them, and deletes the keys that no longer exist – or no longer pass the filter – all in one transaction. After success the noted version is stored
+                    (<i>Change tracking version</i> on the job page). A change made while the run reads is simply read again by the next run.</li>
+                <li><b>Full read:</b> the first run, a run after <i>reset</i>, and a run whose stored version is older than the change retention (the job paused longer than
+                    the retention) read the whole table and delete the keys that are gone. Run the job more often than the retention.</li>
+                <li>Run history: rows read = changed rows; <code>merge: +inserted ~updated -deleted</code>. A row updated without a real change is not rewritten.</li>
+                <li>With <i>Read a consistent snapshot</i> the version and the changes are read at one point in time. Key columns cannot be masked while collecting.
+                    <a href="/help#parallel-reads">Parallel readers</a> are used for the full reads.</li>
+                <li>Load on the source: change tracking records only the changed keys in an internal table (lighter than CDC); a run reads only the changed rows.</li>
             </ul>
             <h3>Watermark</h3>
             <ul>
@@ -695,7 +756,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
     private static readonly (string Id, string Title)[] Toc =
     [
         ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
-        ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("extract-target", "Target table and schema policy"), ("storage", "Target storage: rowstore or columnstore"),
+        ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("parallel-reads", "Parallel reads"), ("parallel-writes", "Parallel writes"), ("extract-target", "Target table and schema policy"), ("storage", "Target storage: rowstore or columnstore"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
         ("export", "Exports"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("transfer", "Import and export jobs"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
@@ -707,7 +768,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
     [
         ("overview", "Genel bakış"), ("quick-start", "Hızlı başlangıç"), ("ornekler", "Adım adım örnekler"), ("sss", "Sık sorulan sorular"),
         ("architecture", "Nasıl çalışır: Web ve Worker"),
-        ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("extract-target", "Hedef tablo ve şema kuralı"), ("storage", "Hedef tablo yapısı: rowstore veya columnstore"),
+        ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("parallel-reads", "Paralel okuma"), ("parallel-writes", "Paralel yazma"), ("extract-target", "Hedef tablo ve şema kuralı"), ("storage", "Hedef tablo yapısı: rowstore veya columnstore"),
         ("load-modes", "Yükleme modları"), ("partitioning", "Günlük bölümleme"), ("retention", "Saklama süresi (retention)"),
         ("export", "Export'lar"), ("destinations", "Export hedefleri (GCS, S3, Azure)"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
         ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"), ("transfer", "Job'ları dışa / içe aktarmak"),

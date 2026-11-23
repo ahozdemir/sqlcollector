@@ -70,6 +70,10 @@ public sealed class ExtractJobSpec
     public string? WatermarkColumn { get; set; }
     public string? KeyColumns { get; set; }
     public bool MergeDeleteMissing { get; set; }
+    public bool UseChangeTracking { get; set; }
+    public int ReadParallelism { get; set; } = 1;
+    public string? SplitColumn { get; set; }
+    public int WriteParallelism { get; set; } = 1;
     public SchemaPolicy SchemaPolicy { get; set; } = SchemaPolicy.Strict;
     public bool PartitionDaily { get; set; }
     public TargetStorage TargetStorage { get; set; } = TargetStorage.Rowstore;
@@ -190,6 +194,7 @@ public static class JobDefinitionRules
         if (j.SourceType == SourceType.Table && string.IsNullOrWhiteSpace(j.SourceTable)) errs.Add("Source table is required.");
         if (j.SourceType == SourceType.Query && string.IsNullOrWhiteSpace(j.SourceQuery)) errs.Add("The query cannot be empty.");
         if (j.LoadMode == LoadMode.Incremental && string.IsNullOrWhiteSpace(j.WatermarkColumn)) errs.Add("Incremental mode needs a watermark column.");
+        ValidateReadOptions(j, errs);
         if (j.LoadMode == LoadMode.Merge)
         {
             j.WatermarkColumn = string.IsNullOrWhiteSpace(j.WatermarkColumn) ? null : j.WatermarkColumn.Trim();
@@ -211,6 +216,29 @@ public static class JobDefinitionRules
         if (!j.UsesWatermark()) j.WatermarkColumn = null;
         if (j.LoadMode.KeepsCurrentStateOnly()) j.RetentionDays = null;
         return errs;
+    }
+
+    /// <summary>
+    /// Change tracking (a Merge of a table: no watermark, deletes come from change tracking), parallel reads (a table,
+    /// 1–16 readers, not with a consistent snapshot) and parallel writes (1–8 writers, not for a Merge); normalizes the job
+    /// and adds the errors. Used by the editor and the import.
+    /// </summary>
+    public static void ValidateReadOptions(ExtractJobDef j, List<string> errs)
+    {
+        if (j.LoadMode != LoadMode.Merge || j.SourceType != SourceType.Table) j.UseChangeTracking = false;
+        if (j.UseChangeTracking) { j.WatermarkColumn = null; j.MergeDeleteMissing = false; }
+
+        if (j.SourceType != SourceType.Table || j.ReadParallelism < 1) j.ReadParallelism = 1;
+        if (j.ReadParallelism > ExtractJobRules.MaxReadParallelism)
+            errs.Add($"At most {ExtractJobRules.MaxReadParallelism} parallel readers are allowed.");
+        if (j.ReadParallelism > 1 && j.ReadSnapshot)
+            errs.Add("Parallel reads cannot be combined with a consistent snapshot (each reader would see its own point in time): use one reader or untick the snapshot.");
+        j.SplitColumn = j.ReadParallelism > 1 && !string.IsNullOrWhiteSpace(j.SplitColumn) ? j.SplitColumn.Trim().Trim('[', ']') : null;
+
+        // a merge stages its rows in a session temp table: one writer
+        if (j.LoadMode == LoadMode.Merge || j.WriteParallelism < 1) j.WriteParallelism = 1;
+        if (j.WriteParallelism > ExtractJobRules.MaxWriteParallelism)
+            errs.Add($"At most {ExtractJobRules.MaxWriteParallelism} parallel writers are allowed.");
     }
 
     /// <summary>Checks and normalizes an export job definition (the destination is checked by the caller); returns the errors.</summary>
@@ -404,6 +432,7 @@ public sealed class JobTransferService(MetadataRepository repo, SystemSettingsSe
         SourceSchema = j.SourceSchema, SourceTable = j.SourceTable, ColumnList = j.ColumnList, FilterClause = j.FilterClause,
         SourceQuery = j.SourceQuery, UseNoLock = j.UseNoLock, ReadSnapshot = j.ReadSnapshot, LoadMode = j.LoadMode,
         WatermarkColumn = j.WatermarkColumn, KeyColumns = j.KeyColumns, MergeDeleteMissing = j.MergeDeleteMissing,
+        UseChangeTracking = j.UseChangeTracking, ReadParallelism = j.ReadParallelism, SplitColumn = j.SplitColumn, WriteParallelism = j.WriteParallelism,
         SchemaPolicy = j.SchemaPolicy, PartitionDaily = j.PartitionDaily, TargetStorage = j.TargetStorage, ReplaceRebuild = j.ReplaceRebuild,
         TargetServer = j.TargetServerName, TargetDatabase = j.TargetDatabase, TargetSchema = j.TargetSchema, TargetTable = j.TargetTable,
         TriggerMode = j.TriggerMode, CronExpression = j.CronExpression, TimeZoneId = j.TimeZoneId, RetentionDays = j.RetentionDays,
@@ -626,6 +655,7 @@ public sealed class JobTransferService(MetadataRepository repo, SystemSettingsSe
         SourceTable = s.SourceTable, ColumnList = s.ColumnList, FilterClause = s.FilterClause, SourceQuery = s.SourceQuery,
         UseNoLock = s.UseNoLock, ReadSnapshot = s.ReadSnapshot, LoadMode = s.LoadMode, WatermarkColumn = s.WatermarkColumn,
         KeyColumns = s.KeyColumns, MergeDeleteMissing = s.MergeDeleteMissing, SchemaPolicy = s.SchemaPolicy,
+        UseChangeTracking = s.UseChangeTracking, ReadParallelism = s.ReadParallelism, SplitColumn = s.SplitColumn, WriteParallelism = s.WriteParallelism,
         PartitionDaily = s.PartitionDaily, TargetStorage = s.TargetStorage, ReplaceRebuild = s.ReplaceRebuild, TargetDatabase = s.TargetDatabase ?? "",
         TargetSchema = s.TargetSchema ?? "", TargetTable = s.TargetTable ?? "", TriggerMode = s.TriggerMode,
         CronExpression = s.CronExpression ?? "", TimeZoneId = s.TimeZoneId ?? "", RetentionDays = s.RetentionDays,

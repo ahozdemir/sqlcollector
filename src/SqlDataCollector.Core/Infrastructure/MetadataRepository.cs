@@ -20,7 +20,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                j.SourceType, j.SourceSchema, j.SourceTable, j.ColumnList, j.FilterClause, j.SourceQuery, j.UseNoLock, j.ReadSnapshot,
                j.LoadMode, j.WatermarkColumn, j.SchemaPolicy, j.PartitionDaily, j.TargetStorage, j.TargetServerId, ts.Name AS TargetServerName, j.TargetDatabase,
                j.TargetSchema, j.TargetTable, j.CronExpression, j.TimeZoneId, j.RetentionDays, j.CommandTimeoutSec,
-               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.KeyColumns, j.MergeDeleteMissing, j.FreshnessHours, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
+               j.BatchSize, j.NotifyEmails, j.ReplaceRebuild, j.KeyColumns, j.MergeDeleteMissing, j.UseChangeTracking, j.ReadParallelism, j.SplitColumn, j.WriteParallelism, j.FreshnessHours, j.TriggerMode, j.IsActive, j.CreatedBy, j.ModifiedBy, j.ModifiedAtUtc
         FROM etl.ExtractJob j
         JOIN etl.SqlServer ss ON ss.SqlServerId = j.SourceServerId
         JOIN etl.SqlServer ts ON ts.SqlServerId = j.TargetServerId
@@ -188,11 +188,11 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
             j.ExtractJobId = await c.ExecuteScalarAsync<int>("""
                 INSERT etl.ExtractJob (Name, SourceServerId, SourceDatabase, SourceType, SourceSchema, SourceTable, ColumnList, FilterClause,
                     SourceQuery, UseNoLock, ReadSnapshot, LoadMode, WatermarkColumn, SchemaPolicy, PartitionDaily, TargetStorage, TargetServerId, TargetDatabase, TargetSchema, TargetTable,
-                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, KeyColumns, MergeDeleteMissing, FreshnessHours, TriggerMode, IsActive, CreatedBy, ModifiedBy)
+                    CronExpression, TimeZoneId, RetentionDays, CommandTimeoutSec, BatchSize, NotifyEmails, ReplaceRebuild, KeyColumns, MergeDeleteMissing, UseChangeTracking, ReadParallelism, SplitColumn, WriteParallelism, FreshnessHours, TriggerMode, IsActive, CreatedBy, ModifiedBy)
                 OUTPUT inserted.ExtractJobId
                 VALUES (@Name, @SourceServerId, @SourceDatabase, @SourceType, @SourceSchema, @SourceTable, @ColumnList, @FilterClause,
                     @SourceQuery, @UseNoLock, @ReadSnapshot, @LoadMode, @WatermarkColumn, @SchemaPolicy, @PartitionDaily, @TargetStorage, @TargetServerId, @TargetDatabase, @TargetSchema, @TargetTable,
-                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @KeyColumns, @MergeDeleteMissing, @FreshnessHours, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
+                    @CronExpression, @TimeZoneId, @RetentionDays, @CommandTimeoutSec, @BatchSize, @NotifyEmails, @ReplaceRebuild, @KeyColumns, @MergeDeleteMissing, @UseChangeTracking, @ReadParallelism, @SplitColumn, @WriteParallelism, @FreshnessHours, @TriggerMode, @IsActive, @CreatedBy, @ModifiedBy);
                 """, j);
         }
         else
@@ -203,7 +203,7 @@ public sealed class MetadataRepository(SqlConnectionFactory factory)
                     FilterClause = @FilterClause, SourceQuery = @SourceQuery, UseNoLock = @UseNoLock, ReadSnapshot = @ReadSnapshot, LoadMode = @LoadMode,
                     WatermarkColumn = @WatermarkColumn, SchemaPolicy = @SchemaPolicy, PartitionDaily = @PartitionDaily, TargetStorage = @TargetStorage, TargetServerId = @TargetServerId, TargetDatabase = @TargetDatabase,
                     TargetSchema = @TargetSchema, TargetTable = @TargetTable, CronExpression = @CronExpression, TimeZoneId = @TimeZoneId,
-                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, KeyColumns = @KeyColumns, MergeDeleteMissing = @MergeDeleteMissing, FreshnessHours = @FreshnessHours, TriggerMode = @TriggerMode, IsActive = @IsActive,
+                    RetentionDays = @RetentionDays, CommandTimeoutSec = @CommandTimeoutSec, BatchSize = @BatchSize, NotifyEmails = @NotifyEmails, ReplaceRebuild = @ReplaceRebuild, KeyColumns = @KeyColumns, MergeDeleteMissing = @MergeDeleteMissing, UseChangeTracking = @UseChangeTracking, ReadParallelism = @ReadParallelism, SplitColumn = @SplitColumn, WriteParallelism = @WriteParallelism, FreshnessHours = @FreshnessHours, TriggerMode = @TriggerMode, IsActive = @IsActive,
                     ModifiedBy = @ModifiedBy, ModifiedAtUtc = SYSUTCDATETIME()
                 WHERE ExtractJobId = @ExtractJobId;
                 """, j);

@@ -69,6 +69,10 @@ public sealed class ExtractJobDef
     public bool ReplaceRebuild { get; set; }   // Replace: rebuild the table and swap it in
     public string? KeyColumns { get; set; }    // Merge: key column names (comma separated); nullable in DB: no default
     public bool MergeDeleteMissing { get; set; }   // Merge: delete rows missing from a full read
+    public bool UseChangeTracking { get; set; }    // Merge: read only the changes SQL Server Change Tracking recorded (keys = primary key)
+    public int ReadParallelism { get; set; } = 1;  // table sources: number of parallel source readers (NOT NULL column)
+    public string? SplitColumn { get; set; }       // parallel reads: column whose value range is split; nullable in DB: no default
+    public int WriteParallelism { get; set; } = 1; // number of parallel bulk copies into the target (NOT NULL column; not for Merge)
     public int? FreshnessHours { get; set; }   // alert when no successful load for this many hours (nullable: no default)
     public JobTriggerMode TriggerMode { get; set; } = JobTriggerMode.Schedule;
     public string? NotifyEmails { get; set; }  // job owners' alert recipients (; separated); nullable in DB: no default
@@ -257,9 +261,29 @@ public sealed class DependencyStateRow
 
 public static class ExtractJobRules
 {
-    /// <summary>Reads only rows above the stored watermark: Incremental always, Merge when a watermark column is set.</summary>
+    /// <summary>Reads only rows above the stored watermark: Incremental always, Merge when a watermark column is set (and no Change Tracking).</summary>
     public static bool UsesWatermark(this ExtractJobDef j) =>
-        j.LoadMode == LoadMode.Incremental || (j.LoadMode == LoadMode.Merge && !string.IsNullOrWhiteSpace(j.WatermarkColumn));
+        j.LoadMode == LoadMode.Incremental
+        || (j.LoadMode == LoadMode.Merge && !j.UseChangeTracking && !string.IsNullOrWhiteSpace(j.WatermarkColumn));
+
+    /// <summary>Merge of a table that reads only the changes recorded by SQL Server Change Tracking since the stored version.</summary>
+    public static bool UsesChangeTracking(this ExtractJobDef j) =>
+        j.LoadMode == LoadMode.Merge && j.UseChangeTracking && j.SourceType == SourceType.Table;
+
+    /// <summary>The job keeps a position between runs in etl.ExtractState (a watermark or a change tracking version).</summary>
+    public static bool UsesStoredState(this ExtractJobDef j) => j.UsesWatermark() || j.UsesChangeTracking();
+
+    /// <summary>A table source read by several readers at once (each a slice of the split column's value range).</summary>
+    public static bool UsesParallelRead(this ExtractJobDef j) => j.SourceType == SourceType.Table && j.ReadParallelism > 1;
+
+    /// <summary>Upper limit of parallel source readers per job.</summary>
+    public const int MaxReadParallelism = 16;
+
+    /// <summary>Rows go to the target over several connections at once (not for a Merge: its staging table belongs to one session).</summary>
+    public static bool UsesParallelWrite(this ExtractJobDef j) => j.LoadMode != LoadMode.Merge && j.WriteParallelism > 1;
+
+    /// <summary>Upper limit of parallel target writers per job.</summary>
+    public const int MaxWriteParallelism = 8;
 
     /// <summary>The table holds only the current state (Replace, Merge): retention by age does not apply.</summary>
     public static bool KeepsCurrentStateOnly(this LoadMode mode) => mode is LoadMode.Replace or LoadMode.Merge;

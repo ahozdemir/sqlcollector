@@ -69,6 +69,7 @@
     <table class="table table-sm table-bordered bg-white">
         <thead class="table-light"><tr><th>Need</th><th>Mode</th></tr></thead>
         <tbody>
+            <tr><td><b>Current state</b> of every record, change tracking enabled on the source table</td><td><b>Merge</b> + <b>Change Tracking</b> (changed rows and deletes, no watermark)</td></tr>
             <tr><td><b>Current state</b> of every record, with a modification time column</td><td><b>Merge</b> + watermark (<code>ModifiedAt</code>)</td></tr>
             <tr><td>Current state, no modification column, deleted rows must disappear too</td><td><b>Merge</b>, full read + "Delete rows whose key the source no longer returns"</td></tr>
             <tr><td>The <b>history</b> of every change (a record several times)</td><td><b>Incremental</b> + watermark</td></tr>
@@ -77,19 +78,26 @@
     <h3>Steps (Merge)</h3>
     <ol>
         <li>In <b>3 · Load</b> choose <b>Merge</b> as <b>Load mode</b>. The source table's primary key is ticked under <b>Key columns</b>.</li>
-        <li>If there is a modification time column, choose it as <b>Watermark column</b>: each night only rows changed since the last read are read.</li>
+        <li>If the DBA has enabled change tracking on the table, tick <b>Read only the changes recorded by SQL Server Change Tracking</b>: each run reads only the changed
+            rows and also deletes what was deleted in the source. The form shows whether tracking is on. Otherwise, if there is a modification time column, choose it as
+            <b>Watermark column</b>: each night only rows changed since the last read are read.</li>
         <li>If rows are physically deleted in the source and must be deleted in the target too, leave the watermark empty and tick "Delete rows whose key the source no longer returns".
             <GuideFigure Src="guide/merge-load.png" Caption="Merge: the key (PK) is suggested; unchanged rows are not touched." />
         </li>
         <li>For busy sources enable <b>Read a consistent snapshot</b> in <b>1 · Source</b> (the DBA allows it once; the form shows the state).</li>
         <li>For tables with many millions of rows choose <b>Storage: Columnstore</b> in <b>2 · Target</b> before the first run: loads are about four times faster
             and the table is much smaller. It applies when the table is created.</li>
+        <li>If reading the source is slow (a remote or busy server), choose <b>Parallel readers: 4</b> in <b>1 · Source</b>: the table is read over four connections,
+            split on its primary key. The full reads of a change tracking job use them too. If writing the target is the slow part (millions of rows into a
+            columnstore table), choose <b>Parallel writers: 4</b> in <b>3 · Load</b> (not for Merge).</li>
     </ol>
-    <div class="alert alert-info"><b>Recommended.</b> A <code>rowversion</code> column is the best watermark: it does not miss transactions committed late. A modification time column is fine in most cases.</div>
+    <div class="alert alert-info"><b>Recommended.</b> Change tracking is the most reliable way to read only the changes: it also sees deletes and never misses a late commit.
+        Without it, a <code>rowversion</code> column is the best watermark; a modification time column is fine in most cases. Run a change tracking job more often than the
+        change retention (e.g. 7 days), otherwise the next run reads the whole table again.</div>
     <div class="alert alert-warning"><b>Watch out.</b> The key must identify one row. If the source returns a key twice, the job stops and leaves the target unchanged – on purpose.
         <b>WITH (NOLOCK)</b> can skip or double rows on large busy tables; use the snapshot option instead.</div>
     <p><b>How do I check?</b> Merge jobs show <code>merge: +inserted ~updated -deleted</code> in <b>Run history</b>.</p>
-    <p class="small">Reference: <a href="/help#merge">Merge</a> · <a href="/help#load-modes">Load modes</a> · <a href="/help#consistency">Integrity and consistent reads</a></p>
+    <p class="small">Reference: <a href="/help#merge">Merge</a> · <a href="/help#change-tracking">Change Tracking</a> · <a href="/help#parallel-reads">Parallel reads</a> · <a href="/help#parallel-writes">Parallel writes</a> · <a href="/help#load-modes">Load modes</a> · <a href="/help#consistency">Integrity and consistent reads</a></p>
 </section>
 
 <section id="nightly-export">

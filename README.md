@@ -2,13 +2,36 @@
 
 # SqlHarbor
 
-*Collect, keep and ship your data.* SqlHarbor is the product name; the technical name **SqlDataCollector** stays for the
-projects and namespaces, the Windows service, the program/data folders and the database objects.
+*Collect, keep and ship your data.*
 
-A .NET 10 application that collects data on a schedule from several SQL Server sources into tables on one target
-SQL Server, manages retention on the target, and exports the collected data every night as CSV or Parquet files to
-Google Cloud Storage, Amazon S3 (or S3-compatible storage) or Azure Blob Storage. Scheduling and execution use **Hangfire**. The UI is **Blazor Server** (English) with an
-in-app **Help** section; users sign in with **Active Directory** (Windows/Negotiate), plus one local admin account.
+A .NET 10 application that collects data on a schedule from several **SQL Server** sources into tables on one target
+SQL Server (your DWH), keeps it for a retention period, and ships what was collected as **CSV or Parquet** files to
+**Google Cloud Storage, Amazon S3 / S3-compatible storage or Azure Blob Storage**. Scheduling and execution use **Hangfire**;
+the UI is **Blazor Server** with sign-in through **Active Directory** (plus one local admin), in-app Help and a scenario
+Guide in English and Turkish.
+
+### Highlights
+
+- **Collect** tables, views or free SQL with Append, Replace, Incremental (watermark) or **Merge** (upsert); consistent
+  snapshot reads; strict or evolving target schemas
+- **Read only what changed** with SQL Server **Change Tracking** (inserts, updates and deletes, no watermark column); move
+  large tables with **parallel readers and writers**
+- **Columnstore targets** for large tables – about 3.5× faster loads and 12× smaller than PAGE-compressed rowstore – with an
+  automatic **storage suggestion** from the expected table size
+- **Export** every night to **GCS, S3 or Azure** as CSV or Parquet: all collected tables or single tables, incremental per table
+- **Dependencies**: run a job after other jobs instead of guessing times
+- **Trust the data**: built-in row count integrity on every load and export, quality checks, freshness alerts
+- **Protect personal data**: masking rules, an export guard and a personal data scan
+- **See what happens**: run timeline, trend lines, pipeline view, alerts to e-mail / Teams / webhook
+- **Operate**: job import/export as JSON (test → production), roles and database permissions, an installer and releases
+
+<p>
+  <img src="src/SqlDataCollector/wwwroot/guide/status-timeline.png" width="49%" alt="Run timeline on the Status page" />
+  <img src="src/SqlDataCollector/wwwroot/guide/pipelines.png" width="49%" alt="Pipelines view" />
+</p>
+
+*SqlHarbor* is the product name; the technical name **SqlDataCollector** stays for the projects and namespaces, the Windows
+service, the program/data folders and the database objects.
 
 ---
 
@@ -21,7 +44,7 @@ in-app **Help** section; users sign in with **Active Directory** (Windows/Negoti
   (IIS or Windows Service)        Queues = sdc_extract,sdc_system     └─ DWH                (collected data: stage.Orders …)
         │                               │                             SqlDataCollector (optional)
         │                               │                             Roles = Worker, Queues = sdc_export
-        │                               │                             → reads DWH locally, writes CSV to local disk, uploads to GCS
+        │                               │                             → reads DWH locally, writes CSV/Parquet, uploads to GCS / S3 / Azure
         └──── all ──── Central Hangfire DB (schema hangfire_collector) ────┘
                                         └──> source SQL Servers (ERP, CRM …) – read only
 ```
@@ -37,12 +60,12 @@ database, reads the source and writes the target. Adding jobs needs no deploymen
 | Role | Does | Connections |
 |---|---|---|
 | **Web** | UI, job definitions, schedule registration, "Run now" (enqueue), monitoring | Metadata (r/w), Hangfire (r/w), sources/target read-only (lists, preview, check target) |
-| **Worker** | Hangfire Server: executes extract, export, retention and sync jobs | Metadata, Hangfire, sources (read), target (write + DDL), GCS |
+| **Worker** | Hangfire Server: executes extract, export, retention and sync jobs | Metadata, Hangfire, sources (read), target (write + DDL), object storage |
 
 **Queues** route work to machines: extract jobs → `sdc_extract`, exports → `sdc_export`, system jobs → `sdc_system`
 (prefixed so a shared Hangfire storage never hands our jobs to another application's servers).
 `Collector:Queues` decides what a Worker takes. Recommended for large exports: a Worker **on the target SQL Server host**
-with `Queues = sdc_export` (data is read locally and the CSV is written to that machine's disk, then uploaded), and the
+with `Queues = sdc_export` (data is read locally and the files are written to that machine's disk, then uploaded), and the
 central Worker with `Queues = sdc_extract,sdc_system`. Several Workers may share a queue; the same job never runs twice at once
 (SQL `sp_getapplock`). Small installations can run one process with `Roles = "Web,Worker"`.
 
@@ -60,125 +83,95 @@ Both shared variants may add an export Worker on the target SQL host (`deploy/sh
 
 ## 2. Features
 
-**Extract**
-- Pick source tables/views (multi-select creates one job per table), columns, WHERE filter, NOLOCK
-- Free SQL: CTEs, temp tables, `EXEC dbo.sp …`
-- Load modes: **Append** (snapshot history) · **Replace** (keep only the latest successful load) ·
-  **Incremental** (watermark: datetime/datetime2/date/int/bigint/decimal/rowversion; the parameter uses the column's real
-  SQL type, so no datetime `.003` duplicates and no lost index seeks)
-- **Merge** (upsert by key columns): source rows are staged and checked (no NULL or duplicate keys), then applied in one
-  transaction – changed rows updated (NULL-safe comparison, unchanged rows untouched so incremental exports send only
-  changes), new keys inserted, optionally keys missing from a full read deleted; full read or watermark; unique key index
-  on the target; the run history shows `+inserted ~updated -deleted`
-- **Replace with rebuild** (optional): load a fresh `<table>__sdc_new` from the current source schema (minimally logged),
-  then swap it in atomically – no slow DELETE of the previous load, source column changes absorbed, the old table stays
-  if the load fails. Only for collector tables written by this job alone; grant permissions on the schema.
+**Collecting (extract jobs)**
+- Pick source tables/views – multi-select creates one job per table – columns, a WHERE filter and NOLOCK, or write free SQL
+  (CTEs, temp tables, `EXEC dbo.sp …`)
+- Load modes: **Append** (snapshot history) · **Replace** (only the latest successful load; optional *rebuild and swap*:
+  load a fresh table, swap it in atomically, the old table stays if the load fails) · **Incremental** (watermark on
+  datetime/datetime2/date/int/bigint/decimal/rowversion; the parameter uses the column's real SQL type, so no datetime
+  `.003` duplicates and no lost index seeks) · **Merge** (upsert by key columns in one transaction: changed rows updated
+  NULL-safe, unchanged rows untouched, new keys inserted, optionally keys missing from a full read deleted; run history shows
+  `+inserted ~updated -deleted`)
+- **Change Tracking** (Merge of a table): each run reads only the keys SQL Server Change Tracking recorded since the stored
+  version – changed rows upserted, deleted keys (or keys leaving the filter) deleted, in one transaction; the first run and a run
+  after a pause longer than the change retention read the whole table. Keys = the primary key; no watermark column needed
+- **Parallel reads** (tables): 2–16 readers, each reading one slice of the split column's value range (the clustered index /
+  primary key by default, or any integer or date column) over its own connection; the rows go to the target in one stream, so
+  the integrity count, watermark, Merge and roll-back work unchanged
+- **Parallel writes** (not for Merge): 2–8 bulk copies write into the target at once over their own connections – each
+  compresses its own columnstore rowgroups; the rows of a run keep one `_LoadId`, so a failed run is still removed completely
+- **Consistent reads** (optional): read the source in a SNAPSHOT transaction – one point in time, nothing skipped or read
+  twice on a busy source (needs `ALLOW_SNAPSHOT_ISOLATION ON`)
+- **Schema policy**: *Strict* (create if missing; an existing table must match exactly, otherwise fail with a diff) or
+  *Evolve* (add columns, widen text/binary columns); **Check target** compares source and target column by column before saving
 - New jobs get the target schema from the source database name (`ERP` → `erp`) – one schema per source avoids collisions
-- **Schema policy**: *Strict* (create if missing; an existing table must match exactly, otherwise fail with a diff) ·
-  *Evolve* (add columns, widen text/binary columns)
-- **Check target** compares the source result schema with the target table column by column before saving
+- Technical columns on every target table: `_LoadId`, `_LoadedAt`, `_ExtractJobId`, `_SourceServer`; failed loads are rolled
+  back, loads interrupted by a crash are cleaned up by the next sync; decimal(38,x) is transferred exactly (`SqlDecimal`)
+
+**Target tables and storage**
+- **Rowstore** (clustered index + two nonclustered indexes) or **Columnstore** (one clustered columnstore index) per job, applied
+  when the table is created. Measured on 450,000 rows: PAGE rowstore 20.1 s → columnstore 5.8 s, 41 MB → 3.3 MB; reports as
+  fast, exports of a load up to 2× faster; updates slower. Works with every load mode; no xml/sql_variant columns.
+- **Storage suggestion** for new jobs, applied until the user picks one: estimated target rows (Append: source rows × loads per
+  day × days kept; other modes: source rows) + 25 % growth headroom → Columnstore from 1 million rows (Merge from 10 million);
+  per table when several tables are selected
 - Optional **daily partitioning** on `_LoadedAt` (UTC): retention drops whole days with `TRUNCATE … WITH (PARTITIONS)`;
   future partitions are created automatically
-- **Target storage** per job: *Rowstore* (clustered index + two nonclustered indexes, default) or *Columnstore* (one
-  clustered columnstore index; bulk loads go straight into compressed rowgroups). Measured on 450,000 rows: rowstore with
-  PAGE compression 18.4 s, columnstore 4.3 s – and much smaller tables. Works with every load mode and daily partitions;
-  no xml/sql_variant columns; applies when the table is created (existing tables keep their layout).
-  New jobs get a **storage suggestion** that is applied until the user picks one: estimated target rows (Append: source
-  rows × loads per day × days kept; other modes: source rows) plus 25 % growth headroom, Columnstore from 1 million rows
-  (Merge from 10 million: updates are about 2× slower in a columnstore); per table when several tables are selected.
-  Measured on 1.8 M rows: reports as fast, exports up to 2× faster, lookups without index faster, 8× smaller than PAGE
-- Technical columns on every target table: `_LoadId`, `_LoadedAt`, `_ExtractJobId`, `_SourceServer`
-- Failed loads are rolled back; loads interrupted by a crash are cleaned up by the next sync
-- decimal(38,x) values are transferred exactly (`SqlDecimal`)
+- **Retention** per job within an organization-wide policy (default, maximum, "keep forever" allowed or not)
 
-**Monitoring views** (no external scripts – work without internet access)
-- **Run timeline** on Status: one lane per job, one bar per run (start, duration, outcome colour) for the last 6/12/24 hours
-  or 3 days, with the current time; jobs that run after other jobs are marked
-- **Trend lines** in the job table: rows and duration of the last 30 runs; the last point turns amber when it is under half or
-  over twice the median of the earlier runs, a red ring marks a failed last run
-- **Pipelines** page: exports and dependent jobs left to right with the jobs they wait for and the destinations; boxes in the
-  colour of the last run, dashed when a job waits for an upstream that has not succeeded
+**Exporting to the cloud**
+- **Destinations** (Admin → *Destinations*): **Google Cloud Storage**, **Amazon S3** and S3-compatible storage (MinIO, Wasabi,
+  Ceph), **Azure Blob Storage** incl. ADLS Gen2 – access keys, connection strings, SAS, service account keys or the server's own
+  identity (AWS role, Managed Identity). Keys are stored encrypted and never shown again; *Test* writes a small object.
+- **All collected tables** (nightly): every collected table of a database, one file set per table, only the loads since that
+  table's previous export ("what was collected today"); new tables are picked up automatically; per-table state, so one failing
+  table does not block the others and a retry only redoes what is missing. **Single table** (full or incremental) and
+  **custom query** (`@RunDate`, `@RunAtUtc`) modes too.
+- **CSV or Parquet** per job. CSV: RFC 4180 (delimiter, quoting, LF/CRLF, NULL value, UTF-8 BOM), plain or gzip upload.
+  Parquet: typed columns (exact decimals up to 38 digits, timestamps, binary), Snappy/Zstd/Gzip, row groups – read directly by
+  BigQuery, Spark, Databricks, pandas. Both split by max rows per file.
+- Object names with tokens `{Name} {Database} {Schema} {Table} {Date} {DateCompact} {Time} {Part}`; a run manifest per export;
+  multipart/resumable uploads with retries and size verification; a load still running is never exported half-done; the local
+  archive is always gzip
 
-**Import / export of job definitions** (*Jobs → Import / export*, CLI `jobs-export` / `jobs-import`)
-- Selected extract and export jobs (optionally with the jobs they run after), their quality checks and dependencies as one
-  portable JSON file – environment promotion (test → production), backups, version control. Servers, destinations and
-  upstream jobs are referenced by name; no keys, watermarks or run history.
-- The import is planned first (create / overwrite / unchanged / error per job) with the same checks as *Save* –
-  permissions, retention policy, Merge/rebuild target tables, cron, dependency loops – and saves nothing while there is an
-  error. Unknown server and destination names are mapped; existing jobs are skipped or overwritten (keeping their active
-  state and watermark); new jobs are created inactive by default.
+**Scheduling and dependencies**
+- Each job runs **on a cron schedule** (in its time zone, next runs previewed) or **after other jobs**: it starts as soon as every
+  selected extract/export has succeeded again – e.g. the nightly export right after all extracts. Each upstream success is used
+  once; loops are refused.
 
-**Export (Google Cloud Storage, Amazon S3 / S3-compatible, Azure Blob Storage)**
-- **Destinations** (Admin → *Destinations*): named targets per provider – GCS (Settings credential or own JSON key), Amazon S3
-  (access key or the server's AWS identity), S3-compatible storage such as MinIO, Wasabi or Ceph (endpoint, path-style URLs)
-  and Azure Blob Storage incl. ADLS Gen2 (connection string, SAS, account key or Managed Identity). Keys are stored
-  encrypted (`Secrets:Key`) and never shown again; *Test* writes a small object. Each export job picks a destination;
-  existing GCS jobs are given one automatically on upgrade. Every provider: multipart upload and a size check.
-- **All collected tables** (nightly): every extract target table in a database (optionally one schema), **one CSV set per
-  table**, only the loads since that table's previous export – i.e. "what was collected today". New tables are picked up
-  automatically. Per-table state: one failing table does not block the others; a retry only redoes what is missing
-  (*PartiallyFailed*). One run manifest in `…/_manifests/`.
-- **Single table** incremental or full, **Custom query** (`@RunDate`, `@RunAtUtc`)
-- A load that is still running is never exported half-done
-- **File format per job: CSV or Parquet.** Parquet keeps the column types (int/bigint, exact decimals up to 38 digits via
-  BigDecimal, date, timestamp in microseconds, datetimeoffset as UTC, time, binary; text for the rest and for masked columns),
-  compresses inside the file (Snappy default, Zstd, Gzip, none), writes row groups of `Collector:ParquetRowGroupSize` rows
-  (100,000) and splits by max rows per file; object names end in `.parquet`. Read directly by BigQuery, Spark, Databricks, pandas.
-- RFC 4180 CSV: delimiter, quoting, LF/CRLF, NULL value, UTF-8 BOM, split by max rows per file
-- **Uploaded to GCS as plain CSV** (optional per job: upload gzip); the **local archive is always `.csv.gz`**
-- Object names with tokens `{Name} {Database} {Schema} {Table} {Date} {DateCompact} {Time} {Part}`; default
-  `exports/{Database}/{Schema}.{Table}/dt={Date}/{Table}_{DateCompact}_{Time}_{Part}.csv`
-- Local day folders under `WorkDirectory`; with `KeepLocalFiles` the files are gzip-compressed after a successful upload and kept for `LocalFileRetentionDays`
-- Resumable upload, retries, size verification
+**Trusting the data**
+- **Integrity, always on**: every extract checks *rows read = rows arrived*, every export re-counts the rows in the written files
+  against the rows read, every upload verifies the object size; a mismatch fails the run
+- **Quality checks** after every load: minimum rows, row count change vs. the last 10 loads, source count reconciliation, NULL
+  share, duplicate keys, custom SQL. *Warning* or *Error*; a failed check keeps dependent jobs waiting and sends an alert.
+- **Freshness**: alert when a job has no good load for N hours
 
-**Scheduling**
-- Each job runs **on a cron schedule** (in its time zone, next runs previewed) or **after other jobs**: it starts as soon as
-  every selected extract/export has succeeded again (export *Skipped* counts), e.g. the nightly export right after all
-  extracts. Each upstream success is used once; loops are refused; checked after every run and by the sync job
-  (`etl.JobDependency`, `etl.JobTrigger`). Lists and Status show such jobs as *after A, B*.
+**Data protection**
+- **Masking rules** by column name pattern and scope: Hash (keyed HMAC-SHA256 – joinable, not reversible), Partial, Email,
+  Redact, Null; applied to the exported files only or already when collecting
+- **Export guard** (Off / Warn / Block): the first rows of every export are checked for e-mail addresses, Turkish national IDs,
+  IBANs, card numbers and phone numbers in unmasked columns
+- **Personal data scan** of the collected tables with one-click *Create rule*
 
-**Data quality** (job section *5 · Data quality*, page *Data quality*)
-- Checks run after every successful load: **minimum rows**, **row count change** vs. the last 10 loads, **source count**
-  reconciliation (table sources; Merge compares the current state), **NULL share** of a column, **duplicate keys**
-  (this load or all rows) and **custom SQL** returning one number (runs as the read-only export reader)
-- Severity *Warning* or *Error*; the worst result is the load's quality status (shown in the run history). A failed check
-  never undoes the load, but **jobs that run after it wait** until a load passes; alerts *QualityFailed* / *QualityWarning*
-- **Freshness**: alert *Stale* when a job has no good load for N hours (one alert per stale period)
-- **Integrity (always on):** every extract verifies *rows read from the source = rows that arrived in the target*, every export
-  re-counts the rows in the written CSV/Parquet files (RFC 4180-aware) against the rows read from the DWH, and the upload
-  verifies each object's size – exact, independent of ongoing changes in the source; a mismatch fails the run
-- **Consistent reads (optional):** *Read a consistent snapshot* reads the source in a SNAPSHOT transaction – one point in
-  time, no rows skipped or read twice on a busy source (unlike NOLOCK); needs `ALLOW_SNAPSHOT_ISOLATION ON` in the source DB.
-  The source count check can use a **cutoff column** (increasing ID or insert time) so rows added after the read do not count
+**Monitoring** (drawn by the application itself – works without internet access)
+- **Status**: workers online, queue, the last run of every job and a **run timeline** – one lane per job, one bar per run
+  (start, duration, outcome) for the last 6/12/24 hours or 3 days
+- **Trend lines** of rows and duration over the last 30 runs; an amber end point when a run is far from the usual value
+- **Pipelines**: which job waits for which and where exports upload, coloured by the last run, *waiting* jobs dashed
+- **Alerts** for failures, partial failures, missed runs, quality problems, stale jobs and recoveries – e-mail, Microsoft Teams
+  or a JSON webhook, plus each job's own *Notify* addresses
+- Run history with timings, audit log, permission check of the service accounts, Hangfire dashboard
 
-**Data protection** (Admin → *Data protection*)
-- **Masking rules** by column name pattern (`*Email*;*Mail`) and optional scope (`ERP.dbo.*`): **Hash** (HMAC-SHA256 with a
-  key derived from `Secrets:Key` – deterministic, joinable, not reversible even for 11-digit IDs), **Partial** (last N visible),
-  **Email** (`a***@domain`), **Redact**, **Null**; applied to **exported files only** or **already when collecting** (the DWH
-  holds masked values). Masked columns are listed in the export manifest; rule changes are audited.
-- **Export guard** (Off / **Warn** / Block): the first 500 rows of every export are checked for e-mail addresses, Turkish
-  national IDs (checksum), IBANs (mod 97), card numbers (Luhn) and phone numbers in columns no rule masks – *Warn* records
-  a warning on the run, *Block* stops before anything is uploaded and deletes the local files.
-- **Personal data scan**: samples the latest rows of every collected table and lists likely personal data columns with the
-  rule that covers them, or a one-click *Create rule*.
-
-**Administration**
-- Roles **Admin / Editor / Viewer** for AD users or groups; server/database permissions (who may use which server/database as source or target)
-- Changes reach open sessions within 10 minutes
-- **Settings** (Admin): organization-wide retention policy – default and maximum retention, whether "keep forever" is
-  allowed, whether Editors may change retention – plus the retention schedule and run history / audit / permission check
-  retention. Stored in `etl.SystemSetting`, no restart needed, audited; enforced on job save and by the retention job.
-  Lists orphaned collector tables (left behind by deleted jobs). GCS objects: use a bucket lifecycle rule.
-- **Alerts**: failed / partially failed / abandoned / missed runs, recoveries and queues without a Hangfire server are sent
-  to e-mail (SMTP via MailKit), Microsoft Teams (Workflows webhook, Adaptive Card) or a generic JSON webhook, plus the
-  job's own *Notify* addresses. Per-channel events, job kinds and name filter; repeat interval; 3 delivery attempts;
-  delivery history. Dispatched every minute by the Web process (so a missing Worker is reported too).
-- Audit log, run history (with read/CSV vs upload timings), status page with active Workers and their queues
-- Hangfire Dashboard: full access for Admin, read-only for others
-- In-app **Help** in **English and Turkish** (switch on the page; the Turkish guide is plain-language with step-by-step
-  examples and FAQ), plus `?` links next to each form section
-- **Guide** (menu *Guide*): nine scenarios – first steps, a nightly table, large tables, the nightly export, personal data,
-  trusting the data, alerts, access, failures – each with why, steps, tips, pitfalls and screenshots, in English and Turkish
+**Operations**
+- **Import / export of job definitions** as JSON (UI and CLI `jobs-export` / `jobs-import`): test → production, backups,
+  version control. Servers, destinations and upstream jobs by name, no secrets; planned first with the same checks as *Save*,
+  nothing saved while there is an error; new jobs inactive by default.
+- Roles **Admin / Editor / Viewer** for AD users or groups, server/database permissions enforced on save
+- **Settings** without restart: retention policy and schedule, run history / audit retention, HTTPS certificate (PKCS#12 or the
+  Windows store), the GCS credential
+- **Installer** (`SqlHarbor-Setup.exe`, wizard or silent) and a GitHub release per version tag
+- In-app **Help** in **English and Turkish** and a **Guide** of ten scenarios (first steps, a nightly table, large tables, the
+  nightly export, personal data, trusting the data, alerts, access, moving jobs to production, failures) with screenshots
 
 ---
 
@@ -220,8 +213,8 @@ the server except an existing SQL Server. Requirements: Windows Server joined to
 
 The service is registered (automatic delayed start, restart on failure) and started; *Open SqlDataCollector* opens
 `https://localhost/login`. **First sign-in** (only possible on the server itself): *Local administrator* asks for a new
-password – there is no default. Then: grant roles to AD groups (*Permissions*), upload the GCS service account key and
-import the corporate HTTPS certificate (*Settings*). Kerberos: `setspn -S HTTP/<host> <service account>`.
+password – there is no default. Then: grant roles to AD groups (*Permissions*), add the export destinations (GCS, S3 or Azure
+keys on *Destinations*) and import the corporate HTTPS certificate (*Settings*). Kerberos: `setspn -S HTTP/<host> <service account>`.
 
 Silent installation: `SqlHarbor-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]`
 (the JSON has the wizard's fields, e.g. `{"Mode":"Embedded","ServiceAccount":"CORP\\svc-sdc","SqlServer":"sql01","MetadataDb":"SdcMeta","DwhDb":"DWH","DatabaseAction":"Now","HostName":"sdc.corp.local"}`).
@@ -305,7 +298,7 @@ With a gMSA (`…$`) no password is entered.
 | `Alerts:Smtp:Host` / `Port` / `Security` / `From` / `UserName` / `Password` | SMTP for e-mail alerts (internal relay recommended; `Security`: Auto, None, StartTls, SslOnConnect) |
 | `Alerts:PublicUrl` | Base URL of the UI for links in alerts |
 | `Https:Port` / `HttpRedirectPort` / `HostName` / `CertificateDirectory` | HTTPS served by Kestrel (0 = off, Urls used); self-signed certificate until one is imported on Settings |
-| `Secrets:Key` | AES-256 key (base64, 32 bytes) for secrets stored in the metadata DB (GCS key); the same on all servers of an installation |
+| `Secrets:Key` | AES-256 key (base64, 32 bytes) for secrets stored in the metadata DB (destination keys, the GCS credential); the same on all servers of an installation |
 | `Collector:RetentionCron` / `RunLogRetentionDays` | Initial values only: once saved on **Settings**, the values in `etl.SystemSetting` win |
 | `Gcs:CredentialsPath` | Optional service account JSON file; empty = the key uploaded on Settings, else Application Default Credentials (needs `roles/storage.objectCreator`) |
 | `Gcs:Endpoint` | Optional (Private Service Connect / emulator) |
@@ -320,7 +313,7 @@ Secrets can come from environment variables: `ConnectionStrings__Metadata`, `Loc
 | Time | Job | Worker |
 |---|---|---|
 | 00:00–00:30 | Extract jobs (ERP, CRM → DWH.stage.*) | central (`sdc_extract`) |
-| 01:00 (or *after* the extract jobs) | GCS export *All collected tables* (DWH) → one CSV set per table with that day's loads | DB host (`sdc_export`) |
+| 01:00 (or *after* the extract jobs) | Export *All collected tables* (DWH) to GCS / S3 / Azure → one file set per table with that day's loads | DB host (`sdc_export`) |
 | 01:30 | Retention (old days removed, partitions truncated) | central (`sdc_system`) |
 
 ---

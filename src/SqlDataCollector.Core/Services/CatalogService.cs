@@ -15,6 +15,9 @@ public sealed record TableInfo(string Schema, string Name, string Type, long? Ro
 /// <summary>A source column; KeyOrdinal = position in the primary key (0 = not part of it).</summary>
 public sealed record ColumnInfo(string Name, string TypeDeclaration, bool Nullable, bool IsIdentity, int KeyOrdinal = 0);
 
+/// <summary>Change tracking of a source table: the database retention ("2 days"; null = not enabled in the database) and whether the table is tracked.</summary>
+public sealed record ChangeTrackingStatus(string? DatabaseRetention, bool TableTracked);
+
 public sealed record PreviewResult(IReadOnlyList<string> Columns, IReadOnlyList<string?[]> Rows, IReadOnlyList<ColumnInfo> Schema);
 
 public sealed record ConnectionTestResult(bool Ok, string Message);
@@ -108,6 +111,25 @@ public sealed class CatalogService(SqlConnectionFactory factory, MetadataReposit
         cmd.CommandText = "SELECT snapshot_isolation_state FROM sys.databases WHERE name = @db;";
         cmd.Parameters.AddWithValue("@db", database);
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct) ?? 0) == 1;
+    }
+
+    /// <summary>
+    /// Change tracking of a source table as the service account sees it: the database's retention (null = not enabled) and
+    /// whether the table's changes can be read (the same check as a run: CHANGE_TRACKING_MIN_VALID_VERSION).
+    /// </summary>
+    public async Task<ChangeTrackingStatus> ChangeTrackingStatusAsync(int serverId, string database, string schema, string table, CancellationToken ct = default)
+    {
+        await using var c = await factory.OpenAsync(await ServerAsync(serverId), database, forWrite: false, ct);
+        await using var cmd = c.CreateCommand();
+        cmd.CommandTimeout = UiTimeoutSec;
+        cmd.CommandText = """
+            SELECT (SELECT CONCAT(retention_period, ' ', LOWER(retention_period_units_desc)) FROM sys.change_tracking_databases WHERE database_id = DB_ID()),
+                   CAST(CASE WHEN CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID(@t)) IS NULL THEN 0 ELSE 1 END AS bit);
+            """;
+        cmd.Parameters.AddWithValue("@t", SqlIdent.Quote(schema, table));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await r.ReadAsync(ct);
+        return new ChangeTrackingStatus(r.IsDBNull(0) ? null : r.GetString(0), r.GetBoolean(1));
     }
 
     public async Task<IReadOnlyList<string>> DatabasesAsync(int serverId, CancellationToken ct = default)

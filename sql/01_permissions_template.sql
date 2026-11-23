@@ -48,6 +48,10 @@ GO
 -- CREATE USER [CORP\sdc-worker$] FOR LOGIN [CORP\sdc-worker$];  ALTER ROLE db_datareader ADD MEMBER [CORP\sdc-worker$];
 -- CREATE USER [CORP\sdc-web$]    FOR LOGIN [CORP\sdc-web$];     ALTER ROLE db_datareader ADD MEMBER [CORP\sdc-web$];
 -- For jobs that use stored procedures (EXEC ...): GRANT EXECUTE ON SCHEMA::dbo TO [CORP\sdc-worker$], [CORP\sdc-web$];
+-- For Merge jobs with Change Tracking (once per database, then per table; the table needs a primary key):
+--   ALTER DATABASE [ERP] SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON);
+--   ALTER TABLE dbo.Orders ENABLE CHANGE_TRACKING;
+--   GRANT VIEW CHANGE TRACKING ON dbo.Orders TO [CORP\sdc-worker$], [CORP\sdc-web$];   -- web: the status hint in the job form
 -- IMPORTANT: do NOT grant write permissions on sources. Users with the Editor role can write free SQL,
 -- so this account's permissions are the security boundary on the source side.
 

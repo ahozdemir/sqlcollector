@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Diagnostics;
 using System.Text;
 using Hangfire;
@@ -14,13 +15,15 @@ public static class SourceCommandBuilder
 {
     public const string WatermarkParam = "@WatermarkFrom";
 
-    public static string BuildSql(ExtractJobDef job, bool hasWatermark)
+    /// <param name="slice">Parallel reads: the slice of the split column this reader reads.</param>
+    /// <param name="selectList">Replaces the column list (e.g. MIN/MAX of the split column).</param>
+    public static string BuildSql(ExtractJobDef job, bool hasWatermark, SourceSlice? slice = null, string? selectList = null)
     {
         if (job.SourceType == SourceType.Query)
             return job.SourceQuery!; // as is; in incremental mode the query uses @WatermarkFrom itself
 
         var sb = new StringBuilder("SELECT ");
-        sb.Append(string.IsNullOrWhiteSpace(job.ColumnList) ? "*" : job.ColumnList);
+        sb.Append(selectList ?? (string.IsNullOrWhiteSpace(job.ColumnList) ? "*" : job.ColumnList));
         sb.Append(" FROM ").Append(SqlIdent.Quote(job.SourceSchema ?? "dbo", job.SourceTable!));
         if (job.UseNoLock && !job.ReadSnapshot) sb.Append(" WITH (NOLOCK)");   // a snapshot read is consistent by itself
 
@@ -28,6 +31,7 @@ public static class SourceCommandBuilder
         if (!string.IsNullOrWhiteSpace(job.FilterClause)) predicates.Add($"({job.FilterClause})");
         if (job.UsesWatermark() && hasWatermark)
             predicates.Add($"{SqlIdent.Quote(job.WatermarkColumn!)} > {WatermarkParam}");
+        if (slice is not null) predicates.Add(slice.Predicate());
         if (predicates.Count > 0) sb.Append(" WHERE ").Append(string.Join(" AND ", predicates));
         return sb.ToString();
     }
@@ -78,7 +82,7 @@ public sealed class ExtractRunner(
             return;
         }
 
-        var state = job.UsesWatermark() ? await repo.GetExtractStateAsync(extractJobId) : null;
+        var state = job.UsesStoredState() ? await repo.GetExtractStateAsync(extractJobId) : null;
         var loadId = await repo.StartLoadRunAsync(job, state?.WatermarkValue, triggeredBy);
         var loadedAtUtc = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
@@ -91,7 +95,7 @@ public sealed class ExtractRunner(
         {
             if (rebuild || merge) await ValidateSingleWriterAsync(job);
             targetConn = await factory.OpenAsync(target, job.TargetDatabase, forWrite: true, ct);
-            var (rows, wmType, wmValue, mergeCounts) = await CopyAsync(job, source, state, loadId, loadedAtUtc, targetConn, rebuild, ct);
+            var (rows, wmType, wmValue, mergeCounts) = await CopyAsync(job, source, target, state, loadId, loadedAtUtc, targetConn, rebuild, ct);
 
             if (rebuild)
             {
@@ -165,11 +169,11 @@ public sealed class ExtractRunner(
     }
 
     private async Task<(long Rows, string? WmType, string? WmValue, MergeCounts? Merge)> CopyAsync(
-        ExtractJobDef job, SqlServerDef sourceServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
+        ExtractJobDef job, SqlServerDef sourceServer, SqlServerDef targetServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
         bool rebuild, CancellationToken ct)
     {
         // a refused snapshot can surface at BEGIN, on the first statement or on the first row fetch (inside the bulk copy)
-        try { return await CopyCoreAsync(job, sourceServer, state, loadId, loadedAtUtc, collector, rebuild, ct); }
+        try { return await CopyCoreAsync(job, sourceServer, targetServer, state, loadId, loadedAtUtc, collector, rebuild, ct); }
         catch (Exception ex) when (job.ReadSnapshot && SnapshotRefused(ex)) { throw SnapshotNotAllowed(job, ex); }
     }
 
@@ -181,22 +185,22 @@ public sealed class ExtractRunner(
     }
 
     private async Task<(long Rows, string? WmType, string? WmValue, MergeCounts? Merge)> CopyCoreAsync(
-        ExtractJobDef job, SqlServerDef sourceServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
+        ExtractJobDef job, SqlServerDef sourceServer, SqlServerDef targetServer, ExtractState? state, long loadId, DateTime loadedAtUtc, SqlConnection collector,
         bool rebuild, CancellationToken ct)
     {
         await using var source = await factory.OpenAsync(sourceServer, job.SourceDatabase, forWrite: false, ct);
         // optional consistent read: one point in time, nothing skipped or read twice while the source keeps changing
         await using var snapshot = job.ReadSnapshot ? await BeginSnapshotAsync(source, job, ct) : null;
 
-        bool hasWatermark = state?.WatermarkValue is not null;
-        await using var cmd = source.CreateCommand();
-        cmd.CommandText = SourceCommandBuilder.BuildSql(job, hasWatermark);
-        cmd.Transaction = snapshot;
-        cmd.CommandTimeout = job.CommandTimeoutSec;
-        if (job.UsesWatermark() && (hasWatermark || job.SourceType == SourceType.Query))
-            cmd.Parameters.Add(Watermark.ToParameter(SourceCommandBuilder.WatermarkParam, state?.WatermarkType, state?.WatermarkValue));
+        // change tracking: the version is taken BEFORE the changes are read; a change made meanwhile is read again next run (idempotent)
+        var changes = job.UsesChangeTracking() ? await ChangeTrackingSource.PrepareAsync(source, snapshot, job, state, ct) : null;
+        if (changes is not null) logger.LogInformation("Extract {Name}: change tracking – {Reason}", job.Name, changes.Reason);
+        var delta = changes is { IsDelta: true };
 
-        await using var reader = await ExecuteSourceAsync(cmd, job, ct);
+        var (reader, cmd) = await OpenSourceReaderAsync(job, sourceServer, source, snapshot, state, changes, ct);
+        await using var cmdScope = cmd;
+        await using var readerScope = reader;
+
         // EXEC sp ... may return row-less results first
         while (reader.FieldCount == 0 && await reader.NextResultAsync(ct)) { }
         if (reader.FieldCount == 0)
@@ -239,19 +243,26 @@ public sealed class ExtractRunner(
         MergePlan? plan = null;
         if (job.LoadMode == LoadMode.Merge)
         {
-            var keys = job.KeyColumnList();
+            // change tracking: the primary key; otherwise the job's key columns
+            IReadOnlyList<string> keys = changes?.Keys ?? job.KeyColumnList();
             if (keys.Count == 0) throw new InvalidOperationException("Merge needs at least one key column.");
             var missing = keys.Where(k => !schema.Any(c => string.Equals(c.ColumnName, k, StringComparison.OrdinalIgnoreCase))).ToList();
             if (missing.Count > 0)
                 throw new InvalidOperationException($"Merge key column(s) not in the source result set: {string.Join(", ", missing)}.");
+            if (changes is not null && keys.FirstOrDefault(k => masks[schema.First(c => string.Equals(c.ColumnName, k, StringComparison.OrdinalIgnoreCase)).ColumnOrdinal!.Value] is not null) is { } maskedKey)
+                throw new InvalidOperationException(
+                    $"Change tracking: the key column {maskedKey} cannot be masked while collecting (deleted keys are matched by their original values).");
             var keyTargets = keys.Select(k => map[k]).ToList();
             await tableManager.EnsureMergeKeyAsync(collector, job.TargetSchema, job.TargetTable, keyTargets, ct);
             var others = schema.Select(c => map[c.ColumnName]).Where(n => !keyTargets.Contains(n, StringComparer.OrdinalIgnoreCase)).ToList();
+            // a full read deletes what the source no longer has: always for change tracking (first run, expired retention), optional otherwise
+            var deleteMissing = changes is not null ? !delta : job.MergeDeleteMissing && !job.UsesWatermark();
             plan = new MergePlan(job.TargetSchema, job.TargetTable, keyTargets, others,
                 await mergeLoader.GetXmlColumnsAsync(collector, job.TargetSchema, job.TargetTable, ct),
-                DeleteMissing: job.MergeDeleteMissing && !job.UsesWatermark(), job.ExtractJobId);
+                DeleteMissing: deleteMissing, job.ExtractJobId, DeleteKeys: delta);
             // rows go to a session temp table first; the target changes only in the final merge transaction
             await mergeLoader.CreateStagingAsync(collector, job.TargetSchema, job.TargetTable, ct);
+            if (delta) await mergeLoader.CreateDeleteStagingAsync(collector, job.TargetSchema, job.TargetTable, keyTargets, ct);
         }
 
         // a columnstore table takes rows straight into compressed rowgroups only in batches of at least 102,400 rows;
@@ -262,23 +273,40 @@ public sealed class ExtractRunner(
             batchSize = Math.Max(batchSize, ColumnstoreBatchSize);
 
         using var augmented = new AugmentedDataReader(reader, loadId, loadedAtUtc, job.ExtractJobId, job.SourceServerName, wmOrdinal, masks);
-        // rebuild: empty staging table, TABLOCK allows minimal logging
-        using var bulk = new SqlBulkCopy(collector, rebuild || plan is not null ? SqlBulkCopyOptions.KeepNulls | SqlBulkCopyOptions.TableLock : SqlBulkCopyOptions.KeepNulls, null)
+        var destination = plan is not null ? MergeSql.Staging
+            : SqlIdent.Quote(job.TargetSchema, rebuild ? job.TargetTable + TargetTableManager.RebuildSuffix : job.TargetTable);
+        // a merge stages into a session temp table: one writer
+        var writers = plan is null && job.UsesParallelWrite() ? Math.Min(job.WriteParallelism, ExtractJobRules.MaxWriteParallelism) : 1;
+        void Configure(SqlBulkCopy bulk, int writer)
         {
-            DestinationTableName = plan is not null ? MergeSql.Staging
-                : SqlIdent.Quote(job.TargetSchema, rebuild ? job.TargetTable + TargetTableManager.RebuildSuffix : job.TargetTable),
-            BatchSize = batchSize,
-            BulkCopyTimeout = 0,
-            NotifyAfter = Math.Max(job.BatchSize * 10, 100_000)
-        };
-        for (int i = 0; i < augmented.FieldCount; i++)
-        {
-            var name = augmented.GetName(i);
-            bulk.ColumnMappings.Add(name, map[name]);
+            bulk.DestinationTableName = destination;
+            bulk.BatchSize = batchSize;
+            bulk.BulkCopyTimeout = 0;
+            bulk.NotifyAfter = Math.Max(job.BatchSize * 10, 100_000);
+            for (int i = 0; i < augmented.FieldCount; i++)
+            {
+                var name = augmented.GetName(i);
+                bulk.ColumnMappings.Add(name, map[name]);
+            }
+            bulk.SqlRowsCopied += writers > 1
+                ? (_, e) => logger.LogInformation("Extract {Name}: writer {Writer}: {Rows:N0} rows copied...", job.Name, writer + 1, e.RowsCopied)
+                : (_, e) => logger.LogInformation("Extract {Name}: {Rows:N0} rows copied...", job.Name, e.RowsCopied);
         }
-        bulk.SqlRowsCopied += (_, e) => logger.LogInformation("Extract {Name}: {Rows:N0} rows copied...", job.Name, e.RowsCopied);
 
-        await bulk.WriteToServerAsync(augmented, ct);
+        if (writers > 1)
+        {
+            // N connections write at once (each compresses its own columnstore rowgroups); concurrent bulk loads cannot hold a table lock
+            logger.LogInformation("Extract {Name}: {Writers} parallel writers", job.Name, writers);
+            await ParallelBulkWriter.WriteAsync(augmented, writers, t => factory.OpenAsync(targetServer, job.TargetDatabase, forWrite: true, t),
+                SqlBulkCopyOptions.KeepNulls, Configure, ct);
+        }
+        else
+        {
+            // rebuild: empty staging table, TABLOCK allows minimal logging
+            using var bulk = new SqlBulkCopy(collector, rebuild || plan is not null ? SqlBulkCopyOptions.KeepNulls | SqlBulkCopyOptions.TableLock : SqlBulkCopyOptions.KeepNulls, null);
+            Configure(bulk, 0);
+            await bulk.WriteToServerAsync(augmented, ct);
+        }
 
         // integrity: every row read from the source must have arrived. Counted on the target side (this load, the rebuild table
         // or the merge staging table), so ongoing changes in the source can never cause a false alarm.
@@ -287,10 +315,88 @@ public sealed class ExtractRunner(
             throw new InvalidOperationException(
                 $"Integrity check failed: {augmented.RowsRead:N0} row(s) were read from the source but {written:N0} arrived in the target. The load is rolled back.");
 
+        if (delta)
+        {
+            // the source connection serves one query at a time: the changed rows are read, now the deleted keys
+            augmented.Dispose();
+            var deleted = await CopyDeletedKeysAsync(job, source, snapshot, changes!, plan!.Keys, collector, ct);
+            logger.LogInformation("Extract {Name}: change tracking – {Rows:N0} changed row(s), {Deleted:N0} deleted key(s)", job.Name, augmented.RowsRead, deleted);
+        }
+
         var mergeCounts = plan is null ? null : await mergeLoader.MergeAsync(collector, plan, augmented.RowsRead, job.Name, ct);
 
+        if (changes is not null)   // the version taken before reading: the next run reads the changes after it
+            return (augmented.RowsRead, ChangeTrackingSql.VersionType, changes.CurrentVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), mergeCounts);
         string? wmValue = augmented.MaxWatermark is null ? null : Watermark.Serialize(augmented.MaxWatermark);
         return (augmented.RowsRead, wmValue is null ? null : wmType, wmValue, mergeCounts);
+    }
+
+    /// <summary>
+    /// The source reader of a run: the changed rows (change tracking), several readers at once (parallel reads) or one reader.
+    /// The command (null for parallel reads, which own their connections) is disposed after the reader.
+    /// </summary>
+    private async Task<(DbDataReader Reader, SqlCommand? Command)> OpenSourceReaderAsync(ExtractJobDef job, SqlServerDef sourceServer,
+        SqlConnection source, SqlTransaction? snapshot, ExtractState? state, ChangeTrackingRead? changes, CancellationToken ct)
+    {
+        bool hasWatermark = job.UsesWatermark() && state?.WatermarkValue is not null;
+        SqlCommand cmd;
+        if (changes is { IsDelta: true })
+        {
+            cmd = SourceCommand(source, snapshot, job, ChangeTrackingSql.ChangedRows(job, changes.Keys));
+            cmd.Parameters.Add(new SqlParameter(ChangeTrackingSql.FromParam, System.Data.SqlDbType.BigInt) { Value = changes.FromVersion!.Value });
+        }
+        else
+        {
+            if (job.UsesParallelRead())
+            {
+                if (job.ReadSnapshot)
+                    logger.LogWarning("Extract {Name}: parallel reads are not combined with a consistent snapshot; one reader is used.", job.Name);
+                else if (await ParallelSourceReader.OpenAsync(factory, sourceServer, job, state, hasWatermark, ct) is { } parallel)
+                {
+                    logger.LogInformation("Extract {Name}: {Readers} parallel readers, {Split}", job.Name, parallel.Readers, parallel.Description);
+                    return (parallel, null);
+                }
+                else logger.LogInformation("Extract {Name}: the split range is too small for parallel readers; one reader is used.", job.Name);
+            }
+            cmd = SourceCommand(source, snapshot, job, SourceCommandBuilder.BuildSql(job, hasWatermark));
+            if (job.UsesWatermark() && (hasWatermark || job.SourceType == SourceType.Query))
+                cmd.Parameters.Add(Watermark.ToParameter(SourceCommandBuilder.WatermarkParam, state?.WatermarkType, state?.WatermarkValue));
+        }
+        try { return (await ExecuteSourceAsync(cmd, job, ct), cmd); }
+        catch { await cmd.DisposeAsync(); throw; }
+    }
+
+    private static SqlCommand SourceCommand(SqlConnection source, SqlTransaction? snapshot, ExtractJobDef job, string sql)
+    {
+        var cmd = source.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Transaction = snapshot;
+        cmd.CommandTimeout = job.CommandTimeoutSec;
+        return cmd;
+    }
+
+    /// <summary>Change tracking: copies the keys deleted in the source (or filtered out) to #sdc_delete; returns their count.</summary>
+    private static async Task<long> CopyDeletedKeysAsync(ExtractJobDef job, SqlConnection source, SqlTransaction? snapshot, ChangeTrackingRead changes,
+        IReadOnlyList<string> keyTargets, SqlConnection collector, CancellationToken ct)
+    {
+        await using var cmd = SourceCommand(source, snapshot, job, ChangeTrackingSql.DeletedKeys(job, changes.Keys));
+        cmd.Parameters.Add(new SqlParameter(ChangeTrackingSql.FromParam, System.Data.SqlDbType.BigInt) { Value = changes.FromVersion!.Value });
+        await using var r = await ExecuteSourceAsync(cmd, job, ct);
+        using var counted = new AugmentedDataReader(r, 0, DateTime.UtcNow, job.ExtractJobId, job.SourceServerName, null);
+        using (var bulk = new SqlBulkCopy(collector, SqlBulkCopyOptions.KeepNulls | SqlBulkCopyOptions.TableLock, null)
+               { DestinationTableName = MergeSql.DeleteStaging, BatchSize = job.BatchSize, BulkCopyTimeout = 0 })
+        {
+            for (int i = 0; i < keyTargets.Count; i++) bulk.ColumnMappings.Add(i, keyTargets[i]);
+            await bulk.WriteToServerAsync(counted, ct);
+        }
+        await using var count = collector.CreateCommand();
+        count.CommandText = $"SELECT COUNT_BIG(*) FROM {MergeSql.DeleteStaging};";
+        count.CommandTimeout = 0;
+        var staged = Convert.ToInt64(await count.ExecuteScalarAsync(ct));
+        if (staged != counted.RowsRead)
+            throw new InvalidOperationException(
+                $"Integrity check failed: {counted.RowsRead:N0} deleted key(s) were read from the source but {staged:N0} arrived in the target. The load is rolled back.");
+        return staged;
     }
 
     private static async Task<SqlTransaction> BeginSnapshotAsync(SqlConnection source, ExtractJobDef job, CancellationToken ct)

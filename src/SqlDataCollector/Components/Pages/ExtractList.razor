@@ -22,7 +22,8 @@
                 <td class="sdc-nowrap"><a href="/extract/@j.ExtractJobId">@j.Name</a> @if (!j.IsActive) { <span class="badge bg-light text-dark border">inactive</span> }</td>
                 <td class="mono sdc-nowrap">@(j.SourceType == SourceType.Table ? $"{j.SourceSchema}.{j.SourceTable}" : "(query)")<span class="sdc-sub">@j.SourceServerName / @j.SourceDatabase</span></td>
                 <td class="mono sdc-nowrap">@j.TargetSchema.@j.TargetTable<span class="sdc-sub">@j.TargetServerName / @j.TargetDatabase</span></td>
-                <td class="sdc-nowrap">@j.LoadMode @if (j.LoadMode == LoadMode.Incremental) { <span class="sdc-sub">watermark: @j.WatermarkColumn</span> } else if (j.LoadMode == LoadMode.Merge) { <span class="sdc-sub">key: @j.KeyColumns@(j.WatermarkColumn is null ? "" : ", wm: " + j.WatermarkColumn)</span> }</td>
+                <td class="sdc-nowrap">@j.LoadMode @if (j.LoadMode == LoadMode.Incremental) { <span class="sdc-sub">watermark: @j.WatermarkColumn</span> } else if (j.LoadMode == LoadMode.Merge) { <span class="sdc-sub">key: @j.KeyColumns@(j.UseChangeTracking ? ", change tracking" : j.WatermarkColumn is null ? "" : ", wm: " + j.WatermarkColumn)</span> }
+                    @if (j.UsesParallelRead() || j.UsesParallelWrite()) { <span class="sdc-sub">@ParallelLabel(j)</span> }</td>
                 <td class="sdc-nowrap">@j.SchemaPolicy @if (j.PartitionDaily) { <span class="sdc-sub">daily partitions</span> }</td>
                 <td><ScheduleCell Kind="@JobRef.Extract" JobId="j.ExtractJobId" Cron="@j.CronExpression" AfterJobs="@(j.TriggerMode == JobTriggerMode.AfterJobs)" Dependencies="deps" /></td>
                 <td class="sdc-nowrap">@(j.LoadMode == LoadMode.Replace ? "latest load" : j.LoadMode == LoadMode.Merge ? "current state" : j.RetentionDays is null ? "∞" : $"{j.RetentionDays} days")</td>
@@ -33,6 +34,9 @@
 </table></div>
 
 @code {
+    private static string ParallelLabel(ExtractJobDef j) => string.Join(" · ",
+        new[] { j.UsesParallelRead() ? $"{j.ReadParallelism} readers" : null, j.UsesParallelWrite() ? $"{j.WriteParallelism} writers" : null }.Where(x => x is not null));
+
     private IReadOnlyList<ExtractJobDef> jobs = [];
     private IReadOnlyList<JobDependencyRow> deps = [];
     private string filter = "";

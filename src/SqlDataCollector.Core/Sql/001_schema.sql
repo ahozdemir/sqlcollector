@@ -566,3 +566,26 @@ IF COL_LENGTH(N'etl.ExtractJob', N'TargetStorage') IS NULL
     ALTER TABLE etl.ExtractJob ADD TargetStorage tinyint NOT NULL CONSTRAINT DF_ExtractJob_TargetStorage DEFAULT (1)
         CONSTRAINT CK_ExtractJob_TargetStorage CHECK (TargetStorage IN (1,2));
 GO
+
+/* ---------------- Change Tracking and parallel reads ----------------
+   ExtractJob.UseChangeTracking: a Merge of a table reads only the keys SQL Server Change Tracking recorded since the
+     stored version (etl.ExtractState WatermarkType 'ctversion'): changed rows are upserted, deleted keys deleted.
+     The first run, and a run whose stored version is older than the change retention, reads the whole table.
+   ExtractJob.ReadParallelism: number of source readers of a table read (1 = one reader); each reads one slice of the
+     value range of SplitColumn (NULL = the leading column of the clustered index or primary key). */
+IF COL_LENGTH(N'etl.ExtractJob', N'UseChangeTracking') IS NULL
+    ALTER TABLE etl.ExtractJob ADD UseChangeTracking bit NOT NULL CONSTRAINT DF_ExtractJob_UseChangeTracking DEFAULT (0);
+IF COL_LENGTH(N'etl.ExtractJob', N'ReadParallelism') IS NULL
+    ALTER TABLE etl.ExtractJob ADD ReadParallelism int NOT NULL CONSTRAINT DF_ExtractJob_ReadParallelism DEFAULT (1)
+        CONSTRAINT CK_ExtractJob_ReadParallelism CHECK (ReadParallelism BETWEEN 1 AND 16);
+IF COL_LENGTH(N'etl.ExtractJob', N'SplitColumn') IS NULL
+    ALTER TABLE etl.ExtractJob ADD SplitColumn nvarchar(128) NULL;
+GO
+
+/* ---------------- Parallel writes ----------------
+   ExtractJob.WriteParallelism: number of bulk copies writing into the target at once, each on its own connection
+   (1 = one writer). The rows of one load keep one _LoadId; a Merge always uses one writer. */
+IF COL_LENGTH(N'etl.ExtractJob', N'WriteParallelism') IS NULL
+    ALTER TABLE etl.ExtractJob ADD WriteParallelism int NOT NULL CONSTRAINT DF_ExtractJob_WriteParallelism DEFAULT (1)
+        CONSTRAINT CK_ExtractJob_WriteParallelism CHECK (WriteParallelism BETWEEN 1 AND 8);
+GO
