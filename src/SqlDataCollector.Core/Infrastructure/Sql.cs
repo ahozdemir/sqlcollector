@@ -49,6 +49,23 @@ public sealed class SqlConnectionFactory(IConfiguration configuration)
         return new ConnectionDescription(b.DataSource, string.IsNullOrEmpty(b.InitialCatalog) ? null : b.InitialCatalog, auth);
     }
 
+    /// <summary>.NET's default Max Pool Size; also the floor of <see cref="PoolSizeFor"/>.</summary>
+    public const int DefaultPoolSize = 100;
+
+    /// <summary>Connections one running job may hold on one database: up to 16 parallel readers (or 8 writers) plus its own.</summary>
+    public const int ConnectionsPerJob = ExtractJobRules.MaxReadParallelism + 2;
+
+    /// <summary>
+    /// Max Pool Size for source/target connections (one pool per server + database + intent and process): every Hangfire
+    /// worker of this process may run a job with parallel readers/writers, so the .NET default of 100 would make jobs wait and
+    /// fail with "max pool size was reached" from about 12 workers with 8 writers. The pool only caps; connections open on demand.
+    /// </summary>
+    public static int PoolSizeFor(int workerCount) => Math.Max(DefaultPoolSize, Math.Max(1, workerCount) * ConnectionsPerJob);
+
+    /// <summary>Pool size for this process, from Collector:WorkerCount (an existing Hangfire host sets it to its own worker count).</summary>
+    public int MaxPoolSize => PoolSizeFor(configuration.GetValue<int?>($"{Options.CollectorOptions.Section}:{nameof(Options.CollectorOptions.WorkerCount)}")
+                                          ?? new Options.CollectorOptions().WorkerCount);
+
     public async Task<SqlConnection> OpenMetadataAsync(CancellationToken ct)
     {
         var conn = Metadata();
@@ -77,7 +94,8 @@ public sealed class SqlConnectionFactory(IConfiguration configuration)
             ApplicationIntent = server.ReadOnlyIntent && !forWrite ? ApplicationIntent.ReadOnly : ApplicationIntent.ReadWrite,
             MultiSubnetFailover = server.MultiSubnetFailover,
             ConnectTimeout = server.ConnectTimeoutSec > 0 ? server.ConnectTimeoutSec : 30,
-            ApplicationName = "SqlDataCollector"
+            ApplicationName = "SqlDataCollector",
+            MaxPoolSize = MaxPoolSize
         };
         if (!string.IsNullOrWhiteSpace(database)) b.InitialCatalog = database;
 

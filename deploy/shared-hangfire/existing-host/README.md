@@ -25,6 +25,7 @@ builder.Services.AddSqlDataCollectorStartup();                     // optional: 
 
 builder.Services.AddHangfireServer(o =>
 {
+    o.WorkerCount = builder.Configuration.GetValue("Collector:WorkerCount", 4);   // also sizes SqlDataCollector's connection pools
     o.Queues = ["default", /* host's own queues */ CollectorQueues.Extract, CollectorQueues.System];
     // add CollectorQueues.Export too, unless exports run on a Worker on the target SQL Server host
 });
@@ -33,12 +34,15 @@ builder.Services.AddHangfireServer(o =>
 If the host already serves another Hangfire storage/schema, add a **second** `AddHangfireServer`
 bound to the `hangfire_collector` storage (`JobStorage` instance), because one Hangfire server reads one storage.
 
+Keep `Collector:WorkerCount` equal to the worker count of the server that runs our jobs: SqlDataCollector sizes its
+source/target connection pools from it (18 connections per worker, at least 100).
+
 ## 3. Configuration the host needs
 
 ```json
 {
   "ConnectionStrings": { "Metadata": "Server=DWH-SQL01;Database=DataCollectorMeta;Integrated Security=true;Encrypt=true" },
-  "Collector": { "Roles": "Worker", "HangfireSchema": "hangfire_collector", "WorkDirectory": "D:\\SqlDataCollector\\work" },
+  "Collector": { "Roles": "Worker", "HangfireSchema": "hangfire_collector", "WorkDirectory": "D:\\SqlDataCollector\\work", "WorkerCount": 4 },
   "Gcs": { "CredentialsPath": "D:\\SqlDataCollector\\secrets\\gcs-sa.json" }
 }
 ```

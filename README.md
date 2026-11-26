@@ -79,6 +79,9 @@ central Worker with `Queues = sdc_extract,sdc_system`. Several Workers may share
 
 Both shared variants may add an export Worker on the target SQL host (`deploy/shared-hangfire/worker-export-dbhost`).
 
+How much data, how many source servers and which hardware: see the [sizing guide](deploy/sizing.md) (measured throughput,
+worksheet, S/M/L sizes and a pilot procedure).
+
 ---
 
 ## 2. Features
@@ -291,7 +294,7 @@ With a gMSA (`…$`) no password is entered.
 | `Collector:Roles` | `Web`, `Worker` or `Web,Worker` |
 | `Collector:Queues` | Queues a Worker serves, e.g. `sdc_export` or `sdc_extract,sdc_system` (default: all three) |
 | `Collector:HangfireSchema` / `HangfirePrepareSchema` | Default `hangfire_collector`; `true` for embedded, `false` for a DBA-managed shared schema |
-| `Collector:WorkerCount` | Concurrent jobs per Worker |
+| `Collector:WorkerCount` | Concurrent jobs per Worker; also sizes the source/target connection pools (18 per worker, at least 100). Changes need a restart |
 | `Collector:TargetTableCompression` | New target tables: `NONE` / `ROW` / `PAGE` |
 | `Collector:WorkDirectory` / `KeepLocalFiles` / `LocalFileRetentionDays` | Local day folders; archive kept as `.csv.gz` for N days |
 | `Collector:ExportReadAsUser` | Read-only database user export reads switch to (default `sdc_export_reader`; empty = off, not recommended) |

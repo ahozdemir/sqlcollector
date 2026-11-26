@@ -15,3 +15,5 @@ Put the matching `appsettings.Production.json` next to `SqlDataCollector.exe`
 Queue names are always `sdc_extract`, `sdc_export`, `sdc_system` so a shared Hangfire storage never
 hands our jobs to another application's servers. Test both modes locally:
 `.\scripts\dev.ps1 full-up` (embedded) and `.\scripts\dev.ps1 shared-up` (2a + 2b).
+
+Capacity planning (data volume, number of sources, hardware): [sizing.md](sizing.md).

@@ -37,7 +37,7 @@ builder.Services.AddSqlDataCollectorStartup();                     // [SDC] opti
 builder.Services.AddHangfireServer(o =>
 {
     o.ServerName = $"{Environment.MachineName}:corporate-host";
-    o.WorkerCount = 4;
+    o.WorkerCount = builder.Configuration.GetValue("Collector:WorkerCount", 4);   // [SDC] same value sizes our connection pools
     var own = (builder.Configuration["Host:OwnQueues"] ?? "default").Split(',', StringSplitOptions.RemoveEmptyEntries);
     var sdc = (builder.Configuration["Collector:Queues"] ?? string.Join(',', CollectorQueues.All))
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
