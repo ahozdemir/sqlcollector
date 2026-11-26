@@ -185,7 +185,7 @@
 
     private static string Hint(DestinationDef d) => d.Provider switch
     {
-        StorageProviders.Gcs => "The identity needs Storage Object Creator on the bucket. 'Credential of the Settings page' uses the credential uploaded on Settings, a credential file from configuration or Application Default Credentials. Credential files are keyless Workload Identity Federation configurations (file-, URL- or AWS-sourced) or service account keys.",
+        StorageProviders.Gcs => "The identity needs Storage Object Creator on the bucket. 'Credential of the Settings page' uses the credential uploaded on Settings, a credential file from configuration or Application Default Credentials. Credential files are keyless Workload Identity Federation configurations (Entra ID, file-, URL- or AWS-sourced) or service account keys.",
         StorageProviders.S3 => "The key needs s3:PutObject (and s3:GetObject for the size check) on the bucket. For MinIO, Wasabi or Ceph enter the endpoint; MinIO usually needs path-style URLs.",
         _ => "The identity needs the Storage Blob Data Contributor role on the container (or a SAS with create/write). ADLS Gen2 accounts work through the same blob endpoint."
     };

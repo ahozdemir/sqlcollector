@@ -336,6 +336,15 @@
             <code>gcloud iam workload-identity-pools create-cred-config</code> komutuyla oluşturulur. Token bir dosyadan (sunucuda zamanlanmış bir görev yeniler), bir URL'den
             (ör. Azure sanal makine metadata adresi) veya AWS'den okunabilir. <i>Executable</i> ve <i>X.509 sertifika</i> türleri Google'ın .NET kütüphanesi desteklemediği için
             kabul edilmez. Yüklerken dosya kontrol edilir: token yalnızca Google adreslerine (<code>*.googleapis.com</code>) gönderilebilir.</li>
+        <li><b>Entra ID token'ını uygulama kendisi alır:</b> WIF dosyasında token dosyası yerine <code>credential_source</code> içine bir <code>"entra"</code> bölümü yazılır;
+            zamanlanmış görev gerekmez.
+            <ul>
+                <li><b>Managed identity</b> (Azure sanal makinesi, Azure Arc'a bağlı sunucu): <code>{ "entra": { "resource": "api://sqlharbor-gcs" } }</code>.
+                    Kullanıcı tanımlı kimlik için <code>"managed_identity_client_id"</code> eklenir.</li>
+                <li><b>Sertifikalı uygulama kaydı</b> (Azure'a bağlı olmayan sunucu): <code>"tenant_id"</code>, <code>"client_id"</code>, <code>"certificate_thumbprint"</code>.
+                    Sertifika, özel anahtarıyla <code>LocalMachine\My</code> deposunda durur ve servis hesabı okuyabilir.</li>
+            </ul>
+            <code>resource</code>, Google'daki OIDC provider'ın kabul ettiği Entra uygulama adresidir (Application ID URI).</li>
         <li><b>Servis hesabı anahtarı:</b> kalıcı bir özel anahtardır; yalnızca anahtar kullanımına izin verilen yerlerde kullanın.</li>
     </ul>
     <p>Export Worker'ın <code>sts.googleapis.com</code>, <code>iamcredentials.googleapis.com</code> ve <code>storage.googleapis.com</code> adreslerine HTTPS ile

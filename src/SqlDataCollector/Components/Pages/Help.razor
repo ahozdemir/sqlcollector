@@ -392,6 +392,19 @@
                     endpoint) and <b>AWS</b>. <i>Executable</i>- and <i>X.509 certificate</i>-sourced configurations are refused: Google's .NET library does not support them.
                     On upload the file is checked: <code>token_url</code> and <code>service_account_impersonation_url</code> must be <code>https://….googleapis.com</code>, so the
                     external token can only be sent to Google. The file holds no secret; the token file must be readable by the service account of every export Worker.</li>
+                <li><b>Entra ID token, fetched by the application</b> – an extension of the configuration above: instead of a token file, <code>credential_source</code>
+                    holds an <code>"entra"</code> block and the Worker gets the Entra ID token itself (no scheduled task):
+                    <ul>
+                        <li><b>Managed identity</b> (Azure VM, Azure Arc-enabled server, App Service): <code>{ "entra": { "resource": "api://sqlharbor-gcs" } }</code>;
+                            a user-assigned identity adds <code>"managed_identity_client_id"</code>.</li>
+                        <li><b>App registration with a certificate</b> (servers without Azure): <code>"tenant_id"</code>, <code>"client_id"</code> and
+                            <code>"certificate_thumbprint"</code> – the certificate with its private key in <code>LocalMachine\My</code>, readable by the service account.</li>
+                    </ul>
+                    <code>resource</code> is the Application ID URI the Google provider accepts as audience (the Worker asks Entra ID for <code>&lt;resource&gt;/.default</code>).
+                    In Google: an OIDC provider with issuer <code>https://sts.windows.net/&lt;tenant-id&gt;/</code> (v1 tokens) or
+                    <code>https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0</code> and that audience. Start from the file <code>gcloud … create-cred-config</code> writes and replace its
+                    <code>credential_source</code>. With or without <code>service_account_impersonation_url</code>: without it, grant the bucket role directly to
+                    <code>principal://iam.googleapis.com/projects/&lt;number&gt;/locations/global/workloadIdentityPools/&lt;pool&gt;/subject/&lt;object id&gt;</code>.</li>
                 <li><b>Service account key</b> (<code>"type": "service_account"</code>): a long-lived private key – use it only where keys are allowed.</li>
             </ul>
             <p>

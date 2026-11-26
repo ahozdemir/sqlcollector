@@ -74,7 +74,8 @@ public static partial class GcsCredentials
         if (!root.TryGetProperty("credential_source", out var source) || source.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("The Workload Identity Federation configuration has no credential_source.");
         string tokenSource;
-        if (get(source, "file") is { Length: > 0 } file) tokenSource = $"token file {file}";
+        if (source.TryGetProperty("entra", out var entra) && entra.ValueKind == JsonValueKind.Object) tokenSource = EntraTokenSource.Parse(entra).Describe();
+        else if (get(source, "file") is { Length: > 0 } file) tokenSource = $"token file {file}";
         else if (get(source, "url") is { Length: > 0 } url)
         {
             if (!Uri.TryCreate(url, UriKind.Absolute, out var u) || (u.Scheme != Uri.UriSchemeHttps && u.Scheme != Uri.UriSchemeHttp))
@@ -89,7 +90,7 @@ public static partial class GcsCredentials
             throw new InvalidOperationException("X.509 certificate-sourced credentials are not supported by Google's .NET client library. Use a file- or URL-sourced " +
                 "token (OIDC or SAML from your identity provider) instead.");
         else
-            throw new InvalidOperationException("Unsupported credential_source: expected \"file\", \"url\" or an AWS environment.");
+            throw new InvalidOperationException("Unsupported credential_source: expected \"entra\", \"file\", \"url\" or an AWS environment.");
 
         var m = ImpersonatedAccount().Match(impersonation ?? "");
         var pool = PoolAndProvider().Match(audience);
@@ -111,18 +112,42 @@ public static partial class GcsCredentials
             throw new InvalidOperationException($"The {field} must be an https address of Google (*.googleapis.com), not {url}.");
     }
 
-    /// <summary>The credential of a stored (already inspected) file: a service account key or a Workload Identity Federation configuration.</summary>
-    public static GoogleCredential Create(string json)
+    /// <summary>
+    /// The credential of a stored (already inspected) file: a service account key or a Workload Identity Federation configuration.
+    /// An Entra ID token source gets its token from Azure.Identity (<paramref name="entraCredential"/> replaces that, e.g. in tests).
+    /// </summary>
+    public static GoogleCredential Create(string json, Func<EntraTokenSource, Azure.Core.TokenCredential>? entraCredential = null)
     {
+        JsonElement root;
         string? type;
-        try { type = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }).RootElement.GetProperty("type").GetString(); }
+        try
+        {
+            root = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }).RootElement.Clone();
+            type = root.GetProperty("type").GetString();
+        }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { throw new InvalidOperationException("The Google credential file has no type."); }
+        if (type == ExternalAccountType && root.TryGetProperty("credential_source", out var source) && source.ValueKind == JsonValueKind.Object
+            && source.TryGetProperty("entra", out var entra) && entra.ValueKind == JsonValueKind.Object)
+            return CreateEntra(root, EntraTokenSource.Parse(entra), entraCredential ?? (e => e.CreateCredential()));
         return type switch
         {
             ServiceAccountType => CredentialFactory.FromJson<ServiceAccountCredential>(json).ToGoogleCredential(),
             ExternalAccountType => CredentialFactory.FromJson(json, ExternalAccountType),
             _ => throw new InvalidOperationException($"Unsupported Google credential type '{type}'.")
         };
+    }
+
+    private static GoogleCredential CreateEntra(JsonElement root, EntraTokenSource entra, Func<EntraTokenSource, Azure.Core.TokenCredential> credential)
+    {
+        string? Get(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var init = new ProgrammaticExternalAccountCredential.Initializer(
+            Get("token_url") ?? throw new InvalidOperationException("The Workload Identity Federation configuration has no token_url."),
+            Get("audience") ?? throw new InvalidOperationException("The Workload Identity Federation configuration has no audience."),
+            Get("subject_token_type") ?? "urn:ietf:params:oauth:token-type:jwt",
+            new EntraSubjectTokenProvider(credential(entra), entra.Scope));
+        if (Get("service_account_impersonation_url") is { Length: > 0 } impersonation) init.ServiceAccountImpersonationUrl = impersonation;
+        if (Get("workforce_pool_user_project") is { Length: > 0 } project) init.WorkforcePoolUserProject = project;
+        return new ProgrammaticExternalAccountCredential(init).ToGoogleCredential();
     }
 
     [GeneratedRegex(@"/serviceAccounts/([^/:]+):generateAccessToken", RegexOptions.IgnoreCase)]

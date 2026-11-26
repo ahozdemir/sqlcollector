@@ -125,7 +125,8 @@ worksheet, S/M/L sizes and a pilot procedure).
 **Exporting to the cloud**
 - **Destinations** (Admin → *Destinations*): **Google Cloud Storage**, **Amazon S3** and S3-compatible storage (MinIO, Wasabi,
   Ceph), **Azure Blob Storage** incl. ADLS Gen2 – access keys, connection strings, SAS, GCS **Workload Identity Federation**
-  (keyless: an OIDC/SAML token from your identity provider is exchanged for a short-lived Google token) or service account keys,
+  (keyless: an OIDC/SAML token from your identity provider is exchanged for a short-lived Google token; the Worker can fetch
+  the **Entra ID** token itself with a managed identity or a certificate) or service account keys,
   or the server's own identity (AWS role, Managed Identity). Credentials are stored encrypted and never shown again; *Test* writes a small object.
 - **All collected tables** (nightly): every collected table of a database, one file set per table, only the loads since that
   table's previous export ("what was collected today"); new tables are picked up automatically; per-table state, so one failing

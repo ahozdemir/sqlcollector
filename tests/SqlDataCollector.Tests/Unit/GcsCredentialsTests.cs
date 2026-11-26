@@ -132,6 +132,79 @@ public sealed class GcsCredentialsTests
         Assert.Equal(info.Kind, roundTrip.Kind);
     }
 
+    // ------------------------------------------------------------------ Entra ID token source (the application gets the token itself)
+
+    private const string Thumb = "0123456789ABCDEF0123456789ABCDEF01234567";
+
+    [Theory]
+    [InlineData("""{"resource":"api://sqlharbor-gcs"}""", "Entra ID managed identity for api://sqlharbor-gcs")]
+    [InlineData("""{"resource":"api://sqlharbor-gcs","managed_identity_client_id":"11111111-2222-3333-4444-555555555555"}""",
+        "Entra ID managed identity 11111111-2222-3333-4444-555555555555 for api://sqlharbor-gcs")]
+    [InlineData("""{"resource":"api://sqlharbor-gcs","tenant_id":"contoso.onmicrosoft.com","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","certificate_thumbprint":"01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67"}""",
+        "Entra ID app aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee (certificate 01234567…) for api://sqlharbor-gcs")]
+    public void Entra_TokenSources_AreDescribed(string entra, string expected) =>
+        Assert.Equal(expected, GcsCredentials.Inspect(Wif(new { entra = JsonDocument.Parse(entra).RootElement })).TokenSource);
+
+    [Theory]
+    [InlineData("""{}""", "needs \"resource\"")]
+    [InlineData("""{"resource":"not a uri"}""", "needs \"resource\"")]
+    [InlineData("""{"resource":"api://x","managed_identity_client_id":"abc"}""", "client id (GUID) of the user-assigned")]
+    [InlineData("""{"resource":"api://x","tenant_id":"t","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}""", "needs tenant_id, client_id and certificate_thumbprint")]
+    [InlineData("""{"resource":"api://x","tenant_id":"t","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","certificate_thumbprint":"1234"}""", "40 hex characters")]
+    [InlineData("""{"resource":"api://x","tenant_id":"t","client_id":"app","certificate_thumbprint":"0123456789ABCDEF0123456789ABCDEF01234567"}""", "application (client) id (GUID)")]
+    [InlineData("""{"resource":"api://x","managed_identity_client_id":"11111111-2222-3333-4444-555555555555","tenant_id":"t","client_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","certificate_thumbprint":"0123456789ABCDEF0123456789ABCDEF01234567"}""", "not both")]
+    public void Entra_InvalidSettings_AreRefused(string entra, string message) =>
+        Assert.Contains(message, Assert.Throws<InvalidOperationException>(() => GcsCredentials.Inspect(Wif(new { entra = JsonDocument.Parse(entra).RootElement }))).Message);
+
+    [Fact]
+    public void Entra_StillSendsTokensOnlyToGoogle() =>
+        Assert.Contains("token_url must be an https address of Google", Assert.Throws<InvalidOperationException>(() =>
+            GcsCredentials.Inspect(Wif(new { entra = new { resource = "api://x" } }, tokenUrl: "https://evil.example.com/token"))).Message);
+
+    [Fact]
+    public void Entra_MissingCertificate_FailsWithAClearMessage()
+    {
+        var json = Wif(new { entra = new { resource = "api://x", tenant_id = "t", client_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", certificate_thumbprint = Thumb } });
+        Assert.Contains($"Certificate {Thumb} was not found", Assert.Throws<InvalidOperationException>(() => GcsCredentials.Create(json)).Message);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Entra_TheApplicationsOwnTokenIsExchangedAtGoogle(bool impersonate)
+    {
+        await using var google = await FakeGoogle.StartAsync();
+        var json = Wif(new { entra = new { resource = "api://sqlharbor-gcs" } }, tokenUrl: google.Url + "v1/token",
+            impersonation: impersonate ? google.Url + "v1/projects/-/serviceAccounts/sdc-export@my-project.iam.gserviceaccount.com:generateAccessToken" : null);
+        var entra = new FakeEntra();
+        EntraTokenSource? seen = null;
+
+        var credential = GcsCredentials.Create(json, e => { seen = e; return entra; });
+        Assert.IsType<ProgrammaticExternalAccountCredential>(credential.UnderlyingCredential);
+        var token = await ((ITokenAccess)credential.CreateScoped(GcsCredentialStore.StorageScope)).GetAccessTokenForRequestAsync();
+
+        Assert.Equal(impersonate ? "impersonated-google-token" : "sts-google-token", token);
+        Assert.Equal("api://sqlharbor-gcs", seen!.Resource);
+        Assert.Equal(["api://sqlharbor-gcs/.default"], Assert.Single(entra.Scopes));
+        var sts = Assert.Single(google.StsRequests);
+        Assert.Equal("entra-access-token", sts["subject_token"]);
+        Assert.Equal(Audience, sts["audience"]);
+        Assert.Equal(impersonate ? 1 : 0, google.ImpersonationAuthorization.Count);
+    }
+
+    /// <summary>Stands in for Azure.Identity (managed identity / app certificate).</summary>
+    private sealed class FakeEntra : Azure.Core.TokenCredential
+    {
+        public ConcurrentQueue<string[]> Scopes { get; } = new();
+        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext context, CancellationToken cancellationToken)
+        {
+            Scopes.Enqueue(context.Scopes);
+            return new Azure.Core.AccessToken("entra-access-token", DateTimeOffset.UtcNow.AddHours(1));
+        }
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext context, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(GetToken(context, cancellationToken));
+    }
+
     // ------------------------------------------------------------------ end to end: external token → STS → impersonation
 
     [Theory]
