@@ -139,6 +139,20 @@ public sealed class SystemSettingsService(MetadataRepository repo, IOptions<Coll
     public const string AlertGraceKey = "Alerts.MissedGraceMinutes";
     public const string AlertBaselineKey = "Alerts.BaselineUtc";
 
+    /// <summary>Days the export Workers keep their local copy of uploaded files (1–3) and whether the value is stored here.</summary>
+    public async Task<(int Days, bool Stored)> GetExportArchiveDaysAsync()
+    {
+        var rows = await repo.GetSystemSettingsAsync();
+        return (Export.ExportArchive.Days(rows, options.Value), rows.TryGetValue(Export.ExportArchive.DaysKey, out var v) && !string.IsNullOrWhiteSpace(v));
+    }
+
+    public async Task SaveExportArchiveDaysAsync(int days, string user)
+    {
+        if (days is < Export.ExportArchive.MinDays or > Export.ExportArchive.MaxDays)
+            throw new InvalidOperationException($"The local export archive keeps {Export.ExportArchive.MinDays} to {Export.ExportArchive.MaxDays} days.");
+        await repo.SaveSystemSettingsAsync(new Dictionary<string, string?> { [Export.ExportArchive.DaysKey] = Str(days) }, user);
+    }
+
     public async Task<AlertSettings> GetAlertSettingsAsync()
     {
         var rows = await repo.GetSystemSettingsAsync();

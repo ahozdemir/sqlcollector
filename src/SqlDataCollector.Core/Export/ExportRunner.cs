@@ -114,9 +114,11 @@ public sealed class ExportRunner(
         var tz = TimeZones.Resolve(job.TimeZoneId);
         var nowUtc = DateTime.UtcNow;
         var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
-        // Day folders: WorkDirectory\yyyy-MM-dd\<job>_<run>\... (kept as a local archive when KeepLocalFiles=true)
-        var workDir = Path.Combine(options.Value.WorkDirectory, local.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            $"{ObjectNameTemplate.Sanitize(job.Name)}_{runId}");
+        // Files of this run: WorkDirectory\yyyy-MM-dd\<job>_<run>\... (removed at the end); uploaded files move to the local
+        // archive WorkDirectory\yyyy-MM-dd\<job>[\<schema.table>]\ when KeepLocalFiles is on (ExportArchive)
+        var dayDir = ExportArchive.DayFolder(options.Value.WorkDirectory, local);
+        var workDir = Path.Combine(dayDir, $"{ObjectNameTemplate.Sanitize(job.Name)}_{runId}");
+        var archiveDays = ExportArchive.Days(await repo.GetSystemSettingsAsync(), options.Value);
         var sw = Stopwatch.StartNew();
 
         try
@@ -132,7 +134,7 @@ public sealed class ExportRunner(
 
             if (job.ExportMode == ExportMode.AllTables)
             {
-                await RunAllTablesAsync(conn, job, runId, local, nowUtc, workDir, sw, ct);
+                await RunAllTablesAsync(conn, job, runId, local, nowUtc, workDir, dayDir, sw, ct);
                 return;
             }
 
@@ -154,7 +156,7 @@ public sealed class ExportRunner(
 
             await using var cmd = await BuildCommandAsync(conn, job, job.SourceSchema ?? "stage", job.SourceTable, lo, hi, local, nowUtc, ct);
             var data = await WriteAndUploadAsync(cmd, job, workDir, ObjectNameTemplate.Sanitize(job.Name),
-                job.SourceSchema, job.SourceTable, local, ct);
+                job.SourceSchema, job.SourceTable, local, Path.Combine(dayDir, ObjectNameTemplate.Sanitize(job.Name)), runId, ct);
 
             if (data.Parts.Count == 0)
             {
@@ -193,19 +195,19 @@ public sealed class ExportRunner(
         {
             _store?.Dispose();
             _store = null;
-            if (!options.Value.KeepLocalFiles)
-            {
-                try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
-                catch (Exception ex) { logger.LogWarning(ex, "Could not delete work directory {Dir}", workDir); }
-            }
-            CleanupOldDayFolders();
+            // uploaded files were moved to the archive; what is left belongs to a failed or skipped part of the run
+            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
+            catch (Exception ex) { logger.LogWarning(ex, "Could not delete work directory {Dir}", workDir); }
+            foreach (var dir in ExportArchive.Cleanup(options.Value.WorkDirectory, options.Value.KeepLocalFiles ? archiveDays : ExportArchive.MinDays, local,
+                         (d, ex) => logger.LogWarning(ex, "Could not delete old export folder {Dir}", d)))
+                logger.LogInformation("Local export archive: removed {Dir} (keeping {Days} day(s))", dir, archiveDays);
         }
     }
 
     // ------------------------------------------------------------------ AllTables
 
     private async Task RunAllTablesAsync(SqlConnection conn, ExportJobDef job, long runId, DateTime local, DateTime nowUtc,
-        string workDir, Stopwatch sw, CancellationToken ct)
+        string workDir, string dayDir, Stopwatch sw, CancellationToken ct)
     {
         var tables = await repo.GetCollectedTablesAsync(job.SourceServerId, job.SourceDatabase, job.SourceSchema);
         var states = (await repo.GetExportTableStatesAsync(job.ExportJobId))
@@ -242,7 +244,8 @@ public sealed class ExportRunner(
 
                 await using var cmd = await BuildCommandAsync(conn, job, t.SchemaName, t.TableName, lo, hi, local, nowUtc, ct);
                 var data = await WriteAndUploadAsync(cmd, job, Path.Combine(workDir, ObjectNameTemplate.Sanitize(t.Key)),
-                    ObjectNameTemplate.Sanitize(t.TableName), t.SchemaName, t.TableName, local, ct);
+                    ObjectNameTemplate.Sanitize(t.TableName), t.SchemaName, t.TableName, local,
+                    Path.Combine(dayDir, ObjectNameTemplate.Sanitize(job.Name), ObjectNameTemplate.Sanitize(t.Key)), runId, ct);
 
                 // Per-table watermark is committed right away: a failure on a later table does not re-export this one
                 await repo.SaveExportTableStateAsync(job.ExportJobId, t.SchemaName, t.TableName, hi);
@@ -295,23 +298,8 @@ public sealed class ExportRunner(
 
     // ------------------------------------------------------------------ helpers
 
-    /// <summary>Removes local day folders older than LocalFileRetentionDays (runs on the machine that holds the files).</summary>
-    private void CleanupOldDayFolders()
-    {
-        var o = options.Value;
-        if (!Directory.Exists(o.WorkDirectory)) return;
-        var cutoff = DateTime.Today.AddDays(-(o.KeepLocalFiles ? Math.Max(1, o.LocalFileRetentionDays) : 1));
-        foreach (var dir in Directory.EnumerateDirectories(o.WorkDirectory))
-        {
-            if (!DateTime.TryParseExact(Path.GetFileName(dir), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)) continue;
-            if (day >= cutoff) continue;
-            try { Directory.Delete(dir, recursive: true); }
-            catch (Exception ex) { logger.LogWarning(ex, "Could not delete old export folder {Dir}", dir); }
-        }
-    }
-
     private async Task<Dataset> WriteAndUploadAsync(SqlCommand cmd, ExportJobDef job, string dir, string baseName,
-        string? schema, string? table, DateTime local, CancellationToken ct)
+        string? schema, string? table, DateTime local, string archiveDir, long runId, CancellationToken ct)
     {
         await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct);
         while (reader.FieldCount == 0 && await reader.NextResultAsync(ct)) { }
@@ -388,9 +376,29 @@ public sealed class ExportRunner(
 
         // Local CSV archive is always gzip-compressed, independent of what was uploaded (plain CSV by default).
         // Compressed only after a successful upload so the upload is never delayed. Parquet is already compressed.
-        if (options.Value.KeepLocalFiles && !parquet)
-            foreach (var part in parts.Where(p => !p.LocalPath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)))
-                await GzipInPlaceAsync(part.LocalPath, ct);
+        if (options.Value.KeepLocalFiles)
+        {
+            try
+            {
+                var files = new List<string>();
+                foreach (var part in parts)
+                {
+                    if (!parquet && !part.LocalPath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await GzipInPlaceAsync(part.LocalPath, ct);
+                        files.Add(part.LocalPath + ".gz");
+                    }
+                    else files.Add(part.LocalPath);
+                }
+                // a full export run again on the same day replaces that day's copy; incremental exports add their new files
+                ExportArchive.Store(files, archiveDir, replace: job.ExportMode is ExportMode.Full or ExportMode.Query, runTag: $"run{runId}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // the files are uploaded: a local archive problem must not fail the export
+                logger.LogWarning(ex, "Export {Name}: could not keep the local copy in {Dir}", job.Name, archiveDir);
+            }
+        }
 
         return new Dataset(parts, columns, writeSec, uploadSec, masks.Where(m => m is not null).Select(m => m!.Describe()).ToList(), warnings);
     }

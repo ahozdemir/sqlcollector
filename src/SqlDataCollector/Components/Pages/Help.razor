@@ -299,8 +299,27 @@
             <h2>Exports</h2>
             <p>Export jobs write CSV or Parquet files and upload them to the job's <a href="/help#destinations">destination</a> (multipart/resumable upload, retries, size check). Files are written to the
                Worker's <code>WorkDirectory</code> in day folders first. Files are uploaded as <b>plain CSV</b> (tick <i>gzip uploaded files</i> to upload
-               <code>.csv.gz</code> instead). With <code>KeepLocalFiles</code> the local copies are <b>always gzip-compressed</b> after a successful upload
-               (<code>…\2026-11-21\&lt;job&gt;_&lt;run&gt;\&lt;schema.table&gt;\*.csv.gz</code>) and kept for <code>LocalFileRetentionDays</code>.</p>
+               <code>.csv.gz</code> instead). After a successful upload a copy stays on the Worker – see <a href="/help#export-archive">Local export archive</a>.</p>
+        </section>
+
+        <section id="export-archive">
+            <h2>Local export archive</h2>
+            <p>The export Worker keeps a copy of every uploaded file, so a file can be checked or sent again by hand when the receiver reports a problem.
+               It is on by default and kept for <b>1 day</b>; <i>Settings → Local export archive</i> allows <b>1 to 3 days</b> (stored in the metadata database, used by every
+               Worker). Copies are made only after a successful upload; CSV files are <b>always gzip-compressed</b> (<code>.csv.gz</code>), Parquet files stay as they are.</p>
+            <p>Folders: <code>&lt;WorkDirectory&gt;\2026-11-26\&lt;job&gt;\</code> (single table or query) and <code>&lt;WorkDirectory&gt;\2026-11-26\&lt;job&gt;\&lt;schema.table&gt;\</code>
+               (all collected tables); the day is the job's time zone.</p>
+            <ul>
+                <li><b>Full</b> and <b>Query</b> exports send the whole result every time: when the job runs again on the same day (e.g. after a problem), its new files
+                    <b>replace</b> that day's copy – the archive holds what was sent last.</li>
+                <li><b>Incremental</b> and <b>All collected tables</b> exports send only new loads: a second run on the same day <b>adds</b> its files
+                    (<code>run&lt;id&gt;_…</code>) next to the earlier ones, so nothing that was sent is lost. A failed part of a run is not archived and is sent again by the next run.</li>
+                <li>Retention: the newest 1–3 day folders that hold files are kept; older ones are removed at the end of each export run. An earlier day stays
+                    until a newer day has files, so at least one day of exports is always there.</li>
+                <li>Disk: plan for one to three days of the compressed exports (see <code>deploy/sizing.md</code>). Only where the disk cannot hold even one day,
+                    <code>Collector:KeepLocalFiles = false</code> turns the copy off for that Worker.</li>
+                <li>To overwrite the uploaded objects too when a full export runs again on the same day, leave <code>{Time}</code> out of the object name template.</li>
+            </ul>
         </section>
 
         <section id="destinations">
@@ -562,8 +581,8 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
                 <li><b>Retention schedule</b> (cron, in <code>Collector:SystemTimeZone</code>), <b>run history</b>, <b>audit log</b> and <b>permission check</b> retention in days.</li>
                 <li><b>Orphaned collector tables</b>: lists tables with <code>_LoadId</code>/<code>_ExtractJobId</code> in the target databases used by jobs that no extract job writes to
                     (e.g. after a job was deleted). Retention never touches them and nothing is dropped automatically.</li>
-                <li>Not managed by the application: exported objects in GCS, S3 or Azure (use a bucket lifecycle rule or lifecycle management policy), the export Worker's local archive (<code>KeepLocalFiles</code>, <code>LocalFileRetentionDays</code>
-                    in its appsettings) and Hangfire's own job history. Connections, roles/queues, folders and security settings (e.g. <code>ExportReadAsUser</code>) stay in appsettings.</li>
+                <li>Not managed by the application: exported objects in GCS, S3 or Azure (use a bucket lifecycle rule or lifecycle management policy), and Hangfire's own job history. <i>Local export archive</i> sets how long export Workers keep their copies (1–3 days, see
+                    <a href="/help#export-archive">Local export archive</a>). Connections, roles/queues, folders and security settings (e.g. <code>ExportReadAsUser</code>) stay in appsettings.</li>
             </ul>
         </section>
 
@@ -775,7 +794,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
         ("overview", "Overview"), ("quick-start", "Quick start"), ("architecture", "Architecture: Web and Worker"),
         ("extract", "Extract jobs"), ("extract-source", "Choosing the source"), ("parallel-reads", "Parallel reads"), ("parallel-writes", "Parallel writes"), ("extract-target", "Target table and schema policy"), ("storage", "Target storage: rowstore or columnstore"),
         ("load-modes", "Load modes"), ("partitioning", "Daily partitioning"), ("retention", "Retention"),
-        ("export", "Exports"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
+        ("export", "Exports"), ("export-archive", "Local export archive"), ("destinations", "Export destinations (GCS, S3, Azure)"), ("export-modes", "Export modes"), ("gcs", "GCS settings and object names"), ("csv-format", "File formats: CSV and Parquet"),
         ("cron", "Scheduling (cron)"), ("dependencies", "Job dependencies"), ("quality", "Data quality checks"), ("consistency", "Integrity and consistent reads"), ("transfer", "Import and export jobs"), ("servers", "Servers and service accounts"), ("servers-system", "System databases"),
         ("settings", "Settings: retention and cleanup"), ("https", "HTTPS certificate"), ("installation", "Installation"), ("alerts", "Alerts"), ("masking", "Data protection (masking)"), ("permission-check", "Permission check"), ("roles", "Roles and permissions"),
         ("hangfire", "Hangfire dashboard"), ("monitoring", "Timeline, trends and pipelines"), ("troubleshooting", "Statuses and troubleshooting")
@@ -787,7 +806,7 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
         ("architecture", "Nasıl çalışır: Web ve Worker"),
         ("extract", "Extract job'ları (veri toplama)"), ("extract-source", "Kaynağı seçmek"), ("parallel-reads", "Paralel okuma"), ("parallel-writes", "Paralel yazma"), ("extract-target", "Hedef tablo ve şema kuralı"), ("storage", "Hedef tablo yapısı: rowstore veya columnstore"),
         ("load-modes", "Yükleme modları"), ("partitioning", "Günlük bölümleme"), ("retention", "Saklama süresi (retention)"),
-        ("export", "Export'lar"), ("destinations", "Export hedefleri (GCS, S3, Azure)"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
+        ("export", "Export'lar"), ("export-archive", "Yerel export arşivi"), ("destinations", "Export hedefleri (GCS, S3, Azure)"), ("export-modes", "Export modları"), ("gcs", "GCS ayarları ve dosya adları"), ("csv-format", "Dosya formatları: CSV ve Parquet"),
         ("cron", "Zamanlama (cron)"), ("dependencies", "Job bağımlılıkları"), ("quality", "Veri kalitesi kontrolleri"), ("consistency", "Bütünlük ve tutarlı okuma"), ("transfer", "Job'ları dışa / içe aktarmak"),
         ("servers", "Sunucular ve servis hesapları"), ("servers-system", "Sistem veritabanları"),
         ("settings", "Ayarlar: saklama ve temizlik"), ("https", "HTTPS sertifikası"), ("installation", "Kurulum"), ("alerts", "Alarmlar"), ("masking", "Veri koruma (maskeleme)"),

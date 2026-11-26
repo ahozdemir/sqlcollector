@@ -145,7 +145,7 @@ these scales (the local environment runs 19 jobs); confirm the row with a pilot 
 - **Export Worker**: the work folder is chosen in the setup wizard (*Export work folder*) or set as
   `Collector:WorkDirectory`; CPU for CSV formatting and Parquet encoding (memory per Parquet export ≈ `ParquetRowGroupSize`
   × row width), and a work disk (`WorkDirectory`) for the largest table's daily export uncompressed, plus
-  `LocalFileRetentionDays` of `.csv.gz` archives when `KeepLocalFiles` is on.
+  1–3 days of the local export archive (on by default, 1 day; *Settings → Local export archive*): CSV as `.csv.gz`, Parquet as is.
 - **Above 1,000 jobs**: Hangfire handles thousands of recurring jobs, but the job lists in the UI load every job at
   once and have not been measured at that size. Run a synthetic test with the expected job count first.
 

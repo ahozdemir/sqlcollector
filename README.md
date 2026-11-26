@@ -279,7 +279,7 @@ sc.exe failure SqlDataCollectorWorker reset= 86400 actions= restart/60000/restar
 sc.exe start SqlDataCollectorWorker
 
 # optional export Worker on the target SQL Server host – "Roles": "Worker", "Queues": "sdc_export",
-#   "WorkDirectory": "E:\\exports", "KeepLocalFiles": true, "LocalFileRetentionDays": 7
+#   "WorkDirectory": "E:\\exports", "KeepLocalFiles": true, "LocalFileRetentionDays": 1
 #   needs outbound HTTPS (443) to storage.googleapis.com
 ```
 With a gMSA (`…$`) no password is entered.
@@ -300,7 +300,7 @@ With a gMSA (`…$`) no password is entered.
 | `Collector:HangfireSchema` / `HangfirePrepareSchema` | Default `hangfire_collector`; `true` for embedded, `false` for a DBA-managed shared schema |
 | `Collector:WorkerCount` | Concurrent jobs per Worker; also sizes the source/target connection pools (18 per worker, at least 100). Changes need a restart |
 | `Collector:TargetTableCompression` | New target tables: `NONE` / `ROW` / `PAGE` |
-| `Collector:WorkDirectory` / `KeepLocalFiles` / `LocalFileRetentionDays` | Local day folders; archive kept as `.csv.gz` for N days |
+| `Collector:WorkDirectory` / `KeepLocalFiles` / `LocalFileRetentionDays` | Local day folders and the local export archive: copies of the uploaded files (CSV as `.csv.gz`), on by default, kept 1–3 days (*Settings → Local export archive* wins; default 1). A full export run again on the same day replaces that day's copy; incremental exports add their files |
 | `Collector:ExportReadAsUser` | Read-only database user export reads switch to (default `sdc_export_reader`; empty = off, not recommended) |
 | `Alerts:Smtp:Host` / `Port` / `Security` / `From` / `UserName` / `Password` | SMTP for e-mail alerts (internal relay recommended; `Security`: Auto, None, StartTls, SslOnConnect) |
 | `Alerts:PublicUrl` | Base URL of the UI for links in alerts |

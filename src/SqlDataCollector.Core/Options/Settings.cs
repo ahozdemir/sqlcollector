@@ -50,11 +50,14 @@ public sealed class CollectorOptions
     /// <summary>Folder where CSV files are written temporarily.</summary>
     public string WorkDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "SqlDataCollector");
 
-    /// <summary>If true, exported files are kept locally after upload as a gzip-compressed archive (*.csv.gz, day folders under WorkDirectory).</summary>
-    public bool KeepLocalFiles { get; set; }
+    /// <summary>
+    /// Keep a local copy of the uploaded files (CSV gzip-compressed, Parquet as is) in day folders under WorkDirectory
+    /// (Export.ExportArchive). On by default; false only where the disk cannot hold one day of exports.
+    /// </summary>
+    public bool KeepLocalFiles { get; set; } = true;
 
-    /// <summary>With KeepLocalFiles: day folders older than this are removed by the export worker itself.</summary>
-    public int LocalFileRetentionDays { get; set; } = 7;
+    /// <summary>Days the local copy is kept (1–3) when the Settings page has no value; the export Worker removes older day folders.</summary>
+    public int LocalFileRetentionDays { get; set; } = Export.ExportArchive.DefaultDays;
 
     /// <summary>
     /// Hangfire queues this Worker listens to (in priority order). Lets you route work to machines, e.g.

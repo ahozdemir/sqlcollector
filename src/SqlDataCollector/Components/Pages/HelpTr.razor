@@ -271,7 +271,25 @@
 <section id="export">
     <h2>Export'lar</h2>
     <p>Export job'ları DWH'deki veriyi dosyaya yazar ve seçilen <a href="/help#destinations">hedefe</a> (GCS, S3 veya Azure Blob) yükler. Yükleme yarıda kesilirse kaldığı yerden devam eder, hata alırsa tekrar dener
-       ve sonunda dosya boyutunu doğrular. Dosyalar önce Worker sunucusunun diskinde günlük klasörlere yazılır; istenirse sıkıştırılarak bir süre arşivde tutulur.</p>
+       ve sonunda dosya boyutunu doğrular. Dosyalar önce Worker sunucusunun diskinde günlük klasörlere yazılır; yükleme bitince bir kopyası
+       <a href="/help#export-archive">yerel arşivde</a> tutulur.</p>
+</section>
+
+<section id="export-archive">
+    <h2>Yerel export arşivi</h2>
+    <p>Export Worker'ı yüklediği her dosyanın bir kopyasını kendi diskinde tutar. Karşı taraf bir sorun bildirirse dosyaya bakılabilir veya elle tekrar gönderilebilir.
+       Varsayılan olarak açıktır ve <b>1 gün</b> saklanır; <i>Settings → Local export archive</i> ile <b>1–3 gün</b> seçilebilir (bütün Worker'lar bu ayarı kullanır).
+       Kopya yalnızca yükleme başarılı olunca alınır. CSV dosyaları sıkıştırılarak (<code>.csv.gz</code>) saklanır, Parquet dosyaları olduğu gibi kalır.</p>
+    <ul>
+        <li><b>Full</b> ve <b>Query</b> export'ları her seferinde bütün veriyi gönderir: job aynı gün tekrar çalışırsa (ör. bir sorundan sonra) yeni dosyalar o günün
+            kopyasının <b>üstüne yazılır</b>; arşivde son gönderilen durur.</li>
+        <li><b>Incremental</b> ve <b>All collected tables</b> export'ları yalnızca yeni yüklemeleri gönderir: aynı gün ikinci çalıştırmanın dosyaları öncekilerin
+            <b>yanına eklenir</b>, gönderilmiş hiçbir şey kaybolmaz. Hata alan kısım arşive girmez, bir sonraki çalıştırma onu tekrar gönderir.</li>
+        <li>En yeni 1–3 günün klasörleri tutulur, eskiler her export'un sonunda silinir. Yeni günün dosyası oluşmadan önceki gün silinmez; yani en az bir günlük dosya hep vardır.</li>
+        <li>Klasör: <code>&lt;WorkDirectory&gt;\2026-11-26\&lt;job&gt;\</code> (tablo bazlı export'larda altında <code>&lt;şema.tablo&gt;</code> klasörleri).</li>
+        <li>Disk bir günlük dosyayı bile almıyorsa o Worker'da <code>Collector:KeepLocalFiles = false</code> ile kapatılabilir.</li>
+        <li>Full export aynı gün tekrar çalışınca buluttaki dosyanın da üstüne yazılması için dosya adı şablonundan <code>{Time}</code> çıkarılmalıdır.</li>
+    </ul>
 </section>
 
 <section id="destinations">
