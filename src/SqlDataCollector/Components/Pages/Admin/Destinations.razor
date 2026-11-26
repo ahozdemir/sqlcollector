@@ -110,7 +110,7 @@
                     @if (d.Provider == StorageProviders.Gcs)
                     {
                         <InputFile class="form-control form-control-sm" accept=".json,application/json" OnChange="LoadKeyFileAsync" />
-                        @if (newSecret is not null) { <div class="form-text text-success">Key file read; saved with the destination.</div> }
+                        @if (newSecret is not null) { <div class="form-text text-success">Credential file read; saved with the destination.</div> }
                     }
                     else
                     {
@@ -165,7 +165,7 @@
     private static string AuthText(string provider, string method) => (provider, method) switch
     {
         (StorageProviders.Gcs, StorageAuthMethods.Default) => "Credential of the Settings page",
-        (StorageProviders.Gcs, _) => "Own service account key (JSON)",
+        (StorageProviders.Gcs, _) => "Own credential file (WIF configuration or key)",
         (StorageProviders.S3, StorageAuthMethods.Key) => "Access key and secret",
         (StorageProviders.S3, _) => "Server's AWS identity (role, environment)",
         (_, StorageAuthMethods.ConnectionString) => "Connection string",
@@ -176,7 +176,7 @@
 
     private static string SecretLabel(DestinationDef d) => (d.Provider, d.AuthMethod) switch
     {
-        (StorageProviders.Gcs, _) => "Service account key (JSON file)",
+        (StorageProviders.Gcs, _) => "Workload Identity Federation configuration or service account key (JSON file)",
         (StorageProviders.S3, _) => "Secret access key",
         (_, StorageAuthMethods.ConnectionString) => "Connection string",
         (_, StorageAuthMethods.Sas) => "SAS token (container or account, with create and write)",
@@ -185,7 +185,7 @@
 
     private static string Hint(DestinationDef d) => d.Provider switch
     {
-        StorageProviders.Gcs => "The service account needs Storage Object Creator on the bucket. 'Credential of the Settings page' uses the key uploaded on Settings, a key file from configuration or Workload Identity.",
+        StorageProviders.Gcs => "The identity needs Storage Object Creator on the bucket. 'Credential of the Settings page' uses the credential uploaded on Settings, a credential file from configuration or Application Default Credentials. Credential files are keyless Workload Identity Federation configurations (file-, URL- or AWS-sourced) or service account keys.",
         StorageProviders.S3 => "The key needs s3:PutObject (and s3:GetObject for the size check) on the bucket. For MinIO, Wasabi or Ceph enter the endpoint; MinIO usually needs path-style URLs.",
         _ => "The identity needs the Storage Blob Data Contributor role on the container (or a SAS with create/write). ADLS Gen2 accounts work through the same blob endpoint."
     };
@@ -216,7 +216,7 @@
         {
             using var reader = new StreamReader(e.File.OpenReadStream(64 * 1024));
             var json = await reader.ReadToEndAsync();
-            Export.GcsCredentialStore.ParseKey(json, "check");   // a service account key, or a clear message
+            Export.GcsCredentialStore.ParseKey(json, "check");   // a WIF configuration or a service account key, or a clear message
             newSecret = json;
         }
         catch (Exception ex) { error = ex.Message; newSecret = null; }

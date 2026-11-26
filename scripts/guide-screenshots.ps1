@@ -40,7 +40,7 @@ $shots = @(
     @{ Name = "destinations";     Page = "/admin/destinations"; H = 1000; X = 256; Y = 64; W = 1168; Ht = 400; Auth = $true },
     @{ Name = "pipelines";        Page = "/pipelines";      H = 1000; X = 256; Y = 64;  W = 1168; Ht = 600; Auth = $true },
     @{ Name = "transfer";         Page = "/transfer";       H = 1000; X = 256; Y = 64;  W = 1168; Ht = 900; Auth = $true },
-    @{ Name = "settings-gcs";     Page = "/admin/settings"; H = 1400; X = 262; Y = 728; W = 1141; Ht = 261; Auth = $true }
+    @{ Name = "settings-gcs";     Page = "/admin/settings"; H = 1500; X = 262; Y = 800; W = 1141; Ht = 488; Auth = $true }
 )
 
 $Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })   # "-Only a,b" arrives as one string with -File

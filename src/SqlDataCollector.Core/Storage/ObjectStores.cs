@@ -121,7 +121,8 @@ public sealed class ObjectStoreFactory(MetadataRepository repo, SecretProtector 
     }
 }
 
-/// <summary>Google Cloud Storage: the shared client (Settings credential) or a client with the destination's own JSON key.</summary>
+/// <summary>Google Cloud Storage: the shared client (Settings credential) or a client with the destination's own credential file
+/// (service account key or Workload Identity Federation configuration).</summary>
 public sealed class GcsObjectStore : IObjectStore
 {
     private readonly GcsUploader _shared;
@@ -133,7 +134,7 @@ public sealed class GcsObjectStore : IObjectStore
     {
         _shared = shared; _bucket = bucket; _logger = logger;
         if (jsonKey is null) return;
-        var builder = new StorageClientBuilder { GoogleCredential = CredentialFactory.FromJson<ServiceAccountCredential>(jsonKey).ToGoogleCredential() };
+        var builder = new StorageClientBuilder { GoogleCredential = Export.GcsCredentials.Create(jsonKey) };
         if (!string.IsNullOrWhiteSpace(options.Endpoint)) builder.BaseUri = options.Endpoint.TrimEnd('/') + "/storage/v1/";
         _own = builder.Build();
     }

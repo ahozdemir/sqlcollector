@@ -73,12 +73,12 @@ public class GcsKeyTests
     }
 
     [Fact]
-    public void ParseKey_AcceptsServiceAccountKeys_Only()
+    public void ParseKey_AcceptsServiceAccountKeys_NotPersonalLogins()   // Workload Identity Federation files: GcsCredentialsTests
     {
         var info = GcsCredentialStore.ParseKey(FakeKeyJson(), "tester");
         Assert.Equal("sdc@proj.iam.gserviceaccount.com", info.ClientEmail);
         Assert.Equal("proj", info.ProjectId);
-        Assert.Contains("not a service account", Assert.Throws<InvalidOperationException>(() => GcsCredentialStore.ParseKey(FakeKeyJson("authorized_user"), "t")).Message);
+        Assert.Contains("not a credential for a service", Assert.Throws<InvalidOperationException>(() => GcsCredentialStore.ParseKey(FakeKeyJson("authorized_user"), "t")).Message);
         Assert.Contains("client_email", Assert.Throws<InvalidOperationException>(() => GcsCredentialStore.ParseKey(FakeKeyJson(email: null), "t")).Message);
         Assert.Contains("not valid JSON", Assert.Throws<InvalidOperationException>(() => GcsCredentialStore.ParseKey("{nope", "t")).Message);
     }

@@ -124,8 +124,9 @@ worksheet, S/M/L sizes and a pilot procedure).
 
 **Exporting to the cloud**
 - **Destinations** (Admin → *Destinations*): **Google Cloud Storage**, **Amazon S3** and S3-compatible storage (MinIO, Wasabi,
-  Ceph), **Azure Blob Storage** incl. ADLS Gen2 – access keys, connection strings, SAS, service account keys or the server's own
-  identity (AWS role, Managed Identity). Keys are stored encrypted and never shown again; *Test* writes a small object.
+  Ceph), **Azure Blob Storage** incl. ADLS Gen2 – access keys, connection strings, SAS, GCS **Workload Identity Federation**
+  (keyless: an OIDC/SAML token from your identity provider is exchanged for a short-lived Google token) or service account keys,
+  or the server's own identity (AWS role, Managed Identity). Credentials are stored encrypted and never shown again; *Test* writes a small object.
 - **All collected tables** (nightly): every collected table of a database, one file set per table, only the loads since that
   table's previous export ("what was collected today"); new tables are picked up automatically; per-table state, so one failing
   table does not block the others and a retry only redoes what is missing. **Single table** (full or incremental) and
@@ -306,7 +307,7 @@ With a gMSA (`…$`) no password is entered.
 | `Https:Port` / `HttpRedirectPort` / `HostName` / `CertificateDirectory` | HTTPS served by Kestrel (0 = off, Urls used); self-signed certificate until one is imported on Settings |
 | `Secrets:Key` | AES-256 key (base64, 32 bytes) for secrets stored in the metadata DB (destination keys, the GCS credential); the same on all servers of an installation |
 | `Collector:RetentionCron` / `RunLogRetentionDays` | Initial values only: once saved on **Settings**, the values in `etl.SystemSetting` win |
-| `Gcs:CredentialsPath` | Optional service account JSON file; empty = the key uploaded on Settings, else Application Default Credentials (needs `roles/storage.objectCreator`) |
+| `Gcs:CredentialsPath` | Optional credential file: a Workload Identity Federation configuration (`"type": "external_account"`) or a service account key; empty = the credential uploaded on Settings, else Application Default Credentials (needs `roles/storage.objectCreator`) |
 | `Gcs:Endpoint` | Optional (Private Service Connect / emulator) |
 | `SqlCredentialOverrides:<ServerName>` | **Only** for non-domain servers or tests (`User ID=..;Password=..`); normally empty |
 

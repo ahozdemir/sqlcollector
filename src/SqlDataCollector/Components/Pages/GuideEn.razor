@@ -14,8 +14,10 @@
         <li><b>Tell where the files go.</b> In <b>Administration → Destinations</b> click <b>+ New destination</b>, choose the provider – <b>Google Cloud Storage</b>,
             <b>Amazon S3 / S3-compatible</b> (MinIO, Wasabi, Ceph …) or <b>Azure Blob Storage</b> – enter the bucket or container and the key, then click <b>Test</b>.
             <GuideFigure Src="guide/destinations.png" Caption="Destinations: one row per bucket or container; Test writes a small test object with the stored key." />
-            For GCS you can instead upload the service account key once in <b>Settings → Google Cloud Storage credential</b> and use it for every GCS destination.
-            <GuideFigure Src="guide/settings-gcs.png" Caption="GCS key on the Settings page: stored encrypted; only the service account's name is shown." />
+            For GCS you can instead upload the credential once in <b>Settings → Google Cloud Storage credential</b> and use it for every GCS destination – preferably a
+            keyless <b>Workload Identity Federation</b> configuration (your identity provider's token is exchanged for a short-lived Google token), otherwise a service
+            account key. After saving, click <b>Test connection</b>.
+            <GuideFigure Src="guide/settings-gcs.png" Caption="GCS credential on the Settings page: stored encrypted; only the identity is shown." />
         </li>
         <li><b>Import the corporate HTTPS certificate</b> (<b>Settings → HTTPS certificate</b>). Browsers warn about the temporary certificate of the installation.</li>
         <li><b>Add the servers</b> (<b>Servers</b>): the source SQL Servers (read from) and the target SQL Server (DWH); click <b>Test</b> for each.</li>

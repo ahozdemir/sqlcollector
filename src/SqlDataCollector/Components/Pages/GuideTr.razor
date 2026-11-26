@@ -14,8 +14,10 @@
         <li><b>Dosyaların nereye gideceğini tanımlayın.</b> <b>Administration → Destinations</b> sayfasında <b>+ New destination</b>'a basın, sağlayıcıyı seçin –
             <b>Google Cloud Storage</b>, <b>Amazon S3 / S3-compatible</b> (MinIO, Wasabi, Ceph …) veya <b>Azure Blob Storage</b> – bucket veya container adını ve anahtarı girip <b>Test</b>'e basın.
             <GuideFigure Src="guide/destinations.png" Caption="Destinations: her bucket veya container bir satır; Test, kayıtlı anahtarla küçük bir deneme dosyası yazar." />
-            GCS için anahtarı bir kez <b>Settings → Google Cloud Storage credential</b> bölümüne yükleyip bütün GCS destination'larında kullanabilirsiniz.
-            <GuideFigure Src="guide/settings-gcs.png" Caption="Settings sayfasında GCS anahtarı: anahtar şifrelenerek saklanır, ekranda yalnızca servis hesabının adı görünür." />
+            GCS için kimlik dosyasını bir kez <b>Settings → Google Cloud Storage credential</b> bölümüne yükleyip bütün GCS destination'larında kullanabilirsiniz.
+            Mümkünse anahtarsız <b>Workload Identity Federation</b> dosyası kullanın (kimlik sağlayıcınızın token'ı kısa ömürlü bir Google token'ına çevrilir); değilse
+            servis hesabı anahtarı. Kaydettikten sonra <b>Test connection</b>'a basın.
+            <GuideFigure Src="guide/settings-gcs.png" Caption="Settings sayfasında GCS kimliği: dosya şifrelenerek saklanır, ekranda yalnızca kimlik görünür." />
         </li>
         <li><b>Kurumsal HTTPS sertifikasını yükleyin</b> (<b>Settings → HTTPS certificate</b>). Kurulumdaki geçici sertifika için tarayıcılar uyarı verir.</li>
         <li><b>Sunucuları ekleyin</b> (<b>Servers</b>): kaynak SQL Server'ları (veri okunacak) ve hedef SQL Server'ı (DWH) ekleyip her biri için <b>Test</b>'e basın.</li>

@@ -49,7 +49,7 @@
             <ol>
                 <li><b>First sign-in</b> (after the installation, on the server itself): <i>Local administrator</i> asks for a new password – there is no default password.
                     The form is only offered on <code>https://localhost</code>, so nobody on the network can set it first.</li>
-                <li><b>Settings</b>: import your HTTPS certificate (.pfx/.p12 or from the Windows store) instead of the self-signed one; upload the Google Cloud Storage service account key if you export to GCS.</li>
+                <li><b>Settings</b>: import your HTTPS certificate (.pfx/.p12 or from the Windows store) instead of the self-signed one; upload the Google Cloud Storage credential (Workload Identity Federation configuration or service account key) if you export to GCS.</li>
                 <li><b>Destinations</b> (Admin): add the bucket or container the files go to (GCS, S3 / S3-compatible or Azure Blob) and click <i>Test</i>.</li>
                 <li><b>Servers</b> (Admin): add your source and target SQL Servers and click <i>Test</i>. Connections use the application's service account.</li>
                 <li><b>Permissions</b> (Admin): give AD groups a role, and tell which servers/databases Editors may use as source or target.</li>
@@ -314,7 +314,7 @@
                 <tbody>
                     <tr><td><b>Google Cloud Storage</b></td><td>Bucket</td>
                         <td><i>Credential of the Settings page</i>: the key on Settings → Google Cloud Storage credential (or <code>Gcs:CredentialsPath</code> / Application Default Credentials, see
-                            <a href="/help#gcs">GCS settings</a>). <i>Own service account key (JSON)</i>: a key file only for this destination.</td></tr>
+                            <a href="/help#gcs">GCS settings</a>). <i>Own credential file (WIF configuration or key)</i>: a Workload Identity Federation configuration or a service account key only for this destination.</td></tr>
                     <tr><td><b>Amazon S3 / S3-compatible</b></td><td>Bucket, region; for MinIO, Wasabi, Ceph, Cloudflare R2 etc. also the <b>endpoint</b> URL and usually <i>path-style</i></td>
                         <td><i>Access key and secret</i>: access key id + secret access key. <i>Server's AWS identity</i>: the AWS credential chain of the Worker (environment, profile, EC2/ECS role).
                             The IAM user needs <code>s3:PutObject</code> on the bucket (and <code>s3:GetObject</code> for the size check).</td></tr>
@@ -357,11 +357,25 @@
         <section id="gcs">
             <h2>GCS settings and object names</h2>
             <p>No Google tools are needed on the servers (the client library is part of the application); the export Worker needs outbound HTTPS to
-               <code>storage.googleapis.com</code> and <code>oauth2.googleapis.com</code>. Create a <b>service account</b> in Google Cloud with
-               <i>Storage Object Creator</i> (<code>roles/storage.objectCreator</code>) on the bucket – an API key cannot write to GCS. The bucket must exist.</p>
-            <p>Credential, in this order: <code>Gcs:CredentialsPath</code> (a JSON key file in appsettings) → the <b>key uploaded on Settings → Google Cloud Storage
-               credential</b> (stored AES-256 encrypted in the metadata database with <code>Secrets:Key</code>, so every Worker uses it; only the service account e-mail is shown)
-               → Application Default Credentials (e.g. keyless Workload Identity Federation via <code>GOOGLE_APPLICATION_CREDENTIALS</code>).
+               <code>storage.googleapis.com</code> and <code>oauth2.googleapis.com</code> (with Workload Identity Federation also <code>sts.googleapis.com</code> and
+               <code>iamcredentials.googleapis.com</code>). The identity needs <i>Storage Object Creator</i> (<code>roles/storage.objectCreator</code>) on the bucket –
+               an API key cannot write to GCS. The bucket must exist.</p>
+            <p>Credential, in this order: <code>Gcs:CredentialsPath</code> (a credential file in appsettings) → the <b>credential uploaded on Settings → Google Cloud Storage
+               credential</b> (stored AES-256 encrypted in the metadata database with <code>Secrets:Key</code>, so every Worker uses it; only the identity is shown)
+               → Application Default Credentials (<code>GOOGLE_APPLICATION_CREDENTIALS</code> of the service). A credential file is one of:</p>
+            <ul>
+                <li><b>Workload Identity Federation configuration</b> (<code>"type": "external_account"</code>, keyless – recommended where service account keys are not allowed):
+                    the Worker reads a token of your identity provider (OIDC or SAML, e.g. AD FS or Entra ID), Google's STS exchanges it for a short-lived token and, with
+                    <code>service_account_impersonation_url</code>, acts as a service account. Create it with
+                    <code>gcloud iam workload-identity-pools create-cred-config projects/&lt;number&gt;/locations/global/workloadIdentityPools/&lt;pool&gt;/providers/&lt;provider&gt;
+                    --service-account=&lt;sa&gt;@@&lt;project&gt;.iam.gserviceaccount.com --credential-source-file=D:\SqlHarbor\token\oidc.jwt --output-file=wif.json</code>.
+                    Supported token sources: a <b>file</b> (a scheduled task of the server refreshes the token before it expires), a <b>URL</b> (e.g. the Azure VM metadata
+                    endpoint) and <b>AWS</b>. <i>Executable</i>- and <i>X.509 certificate</i>-sourced configurations are refused: Google's .NET library does not support them.
+                    On upload the file is checked: <code>token_url</code> and <code>service_account_impersonation_url</code> must be <code>https://….googleapis.com</code>, so the
+                    external token can only be sent to Google. The file holds no secret; the token file must be readable by the service account of every export Worker.</li>
+                <li><b>Service account key</b> (<code>"type": "service_account"</code>): a long-lived private key – use it only where keys are allowed.</li>
+            </ul>
+            <p>
                <i>Test connection</i> gets an access token and can write a small object <code>_sdc_connection_test/&lt;machine&gt;.txt</code> to a bucket.
                This chain is used by GCS <a href="/help#destinations">destinations</a> with sign-in <i>Credential of the Settings page</i>; a destination with its own key ignores it.</p>
             <table class="table table-sm table-bordered bg-white mono">

@@ -280,7 +280,7 @@
        <b>Administration → Destinations</b> sayfasından yönetir; her export job bir destination seçer. Bir destination'ı değiştirdiğinizde (yeni anahtar, başka bucket)
        onu kullanan bütün job'lar bir sonraki çalışmada yeni ayarı kullanır.</p>
     <ul>
-        <li><b>Google Cloud Storage:</b> bucket adı yeterli. Giriş <b>Credential of the Settings page</b> ise Settings sayfasındaki GCS anahtarı kullanılır; <b>Own service account key (JSON)</b> seçilirse yalnızca bu hedef için ayrı bir JSON anahtarı yüklenir.</li>
+        <li><b>Google Cloud Storage:</b> bucket adı yeterli. Giriş <b>Credential of the Settings page</b> ise Settings sayfasındaki GCS anahtarı kullanılır; <b>Own credential file (WIF configuration or key)</b> seçilirse yalnızca bu hedef için ayrı bir Workload Identity Federation dosyası veya servis hesabı anahtarı yüklenir.</li>
         <li><b>Amazon S3 / S3 uyumlu:</b> bucket ve bölge (region). MinIO, Wasabi, Ceph, Cloudflare R2 gibi depolarda ayrıca <b>Endpoint</b> adresi girilir ve genelde <b>Path-style</b> işaretlenir.
             Giriş için <b>Access key and secret</b> verilir ya da <b>Server's AWS identity</b> ile sunucunun kendi AWS kimliği (ortam değişkeni, rol) kullanılır. Kullanıcının bucket'a yazma (<code>s3:PutObject</code>) yetkisi olmalı.</li>
         <li><b>Azure Blob Storage:</b> container adı ve hesap adresi (<code>https://&lt;hesap&gt;.blob.core.windows.net</code>). Giriş: storage account key, connection string,
@@ -309,8 +309,19 @@
 
 <section id="gcs">
     <h2>GCS ayarları ve dosya adları</h2>
-    <p>Sunucuya Google aracı kurmak gerekmez. Google Cloud'da bir <b>servis hesabı</b> oluşturun, bucket üzerinde <i>Storage Object Creator</i> yetkisi verin
-       ve JSON anahtarını <b>Settings</b> sayfasından yükleyin. API key ile GCS'e yazılamaz. Bu anahtar, girişi <b>Credential of the Settings page</b> olan GCS destination'larında kullanılır.</p>
+    <p>Sunucuya Google aracı kurmak gerekmez. Google Cloud'da kullanılan kimliğe bucket üzerinde <i>Storage Object Creator</i> yetkisi verin ve kimlik dosyasını
+       <b>Settings</b> sayfasından yükleyin. API key ile GCS'e yazılamaz. Bu dosya, girişi <b>Credential of the Settings page</b> olan GCS destination'larında kullanılır.
+       İki tür dosya kabul edilir:</p>
+    <ul>
+        <li><b>Workload Identity Federation (anahtarsız, önerilen):</b> sunucu kurumunuzun kimlik sağlayıcısından (AD FS, Entra ID gibi) aldığı OIDC veya SAML token'ını
+            Google'a verir, Google karşılığında kısa ömürlü bir erişim token'ı üretir. Kalıcı bir gizli anahtar yoktur. Dosya
+            <code>gcloud iam workload-identity-pools create-cred-config</code> komutuyla oluşturulur. Token bir dosyadan (sunucuda zamanlanmış bir görev yeniler), bir URL'den
+            (ör. Azure sanal makine metadata adresi) veya AWS'den okunabilir. <i>Executable</i> ve <i>X.509 sertifika</i> türleri Google'ın .NET kütüphanesi desteklemediği için
+            kabul edilmez. Yüklerken dosya kontrol edilir: token yalnızca Google adreslerine (<code>*.googleapis.com</code>) gönderilebilir.</li>
+        <li><b>Servis hesabı anahtarı:</b> kalıcı bir özel anahtardır; yalnızca anahtar kullanımına izin verilen yerlerde kullanın.</li>
+    </ul>
+    <p>Export Worker'ın <code>sts.googleapis.com</code>, <code>iamcredentials.googleapis.com</code> ve <code>storage.googleapis.com</code> adreslerine HTTPS ile
+       erişebilmesi gerekir. Kaydettikten sonra <b>Test connection</b> ile token değişiminin çalıştığını kontrol edin.</p>
     <p>Dosya adı şablonundaki değişkenler:</p>
     <table class="table table-sm table-bordered bg-white">
         <tbody>
