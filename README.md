@@ -212,7 +212,10 @@ the server except an existing SQL Server. Requirements: Windows Server joined to
    or *later*: scripts in `<program folder>\sql` for the DBA (`01_databases_and_permissions.sql`, `02_etl_schema.sql`,
    central: `03_hangfire_central.sql`). Until the metadata DB is ready the app serves a *setup required* page and restarts itself once it is.
 4. **Web and HTTPS** – host name, port (443), self-signed certificate, firewall rule, program and data folder
-   (`%ProgramData%\SqlDataCollector`: `certs\`, `exports\` = temporary CSV files / archive).
+   (`%ProgramData%\SqlDataCollector`: `certs\`), and the **export work folder** (`Collector:WorkDirectory`: temporary export
+   files and the optional `.csv.gz` archive; empty = `<data folder>\exports`). Choose a fast local disk other than C:
+   (e.g. `E:\SqlHarbor\work`); network shares are refused. The service account gets modify rights on it. An upgrade keeps
+   the folder in use; to move it later change `Collector:WorkDirectory` and restart the service.
 
 The service is registered (automatic delayed start, restart on failure) and started; *Open SqlDataCollector* opens
 `https://localhost/login`. **First sign-in** (only possible on the server itself): *Local administrator* asks for a new
@@ -220,7 +223,7 @@ password – there is no default. Then: grant roles to AD groups (*Permissions*)
 keys on *Destinations*) and import the corporate HTTPS certificate (*Settings*). Kerberos: `setspn -S HTTP/<host> <service account>`.
 
 Silent installation: `SqlHarbor-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]`
-(the JSON has the wizard's fields, e.g. `{"Mode":"Embedded","ServiceAccount":"CORP\\svc-sdc","SqlServer":"sql01","MetadataDb":"SdcMeta","DwhDb":"DWH","DatabaseAction":"Now","HostName":"sdc.corp.local"}`).
+(the JSON has the wizard's fields, e.g. `{"Mode":"Embedded","ServiceAccount":"CORP\\svc-sdc","SqlServer":"sql01","MetadataDb":"SdcMeta","DwhDb":"DWH","DatabaseAction":"Now","HostName":"sdc.corp.local","WorkDir":"E:\\SqlHarbor\\work"}`).
 Running the setup again upgrades the binaries and keeps the configuration. Uninstall: *Apps & features* or `/uninstall [/purge]`.
 
 **GitHub release:** pushing a version tag builds the installer on a GitHub-hosted Windows runner

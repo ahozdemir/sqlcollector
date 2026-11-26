@@ -41,6 +41,7 @@ internal sealed class WizardForm : Form
     private readonly CheckBox _firewall = new() { Text = "Open the port in the Windows firewall", Checked = true, AutoSize = true };
     private readonly TextBox _installDir = new() { Width = 420 };
     private readonly TextBox _dataDir = new() { Width = 420 };
+    private readonly TextBox _workDir = new() { Width = 420, PlaceholderText = @"empty = <data folder>\exports" };
     private readonly TextBox _summary = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font("Consolas", 9) };
     private readonly TextBox _progress = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font("Consolas", 9) };
     private readonly Label _finish = new() { Dock = DockStyle.Top, Height = 160 };
@@ -50,6 +51,10 @@ internal sealed class WizardForm : Form
     public WizardForm(string? payload, bool dryRun, string logFile)
     {
         _payload = payload; _dryRun = dryRun; _logFile = logFile;
+        // sizes below are 96-DPI pixels: scale the whole form (all pages are children from the start) to the monitor's DPI
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Text = "SqlHarbor setup" + (dryRun ? " (dry run)" : "");
         Size = new Size(820, 600);
         StartPosition = FormStartPosition.CenterScreen;
@@ -84,8 +89,9 @@ internal sealed class WizardForm : Form
         _pages.Add(Page("Web address and HTTPS",
             Row("Host name", _host), Row("HTTPS port", _port), _firewall,
             Note("A self-signed certificate is created. Import your corporate certificate later in the application (Settings → HTTPS certificate)."),
-            Row("Program folder", _installDir), Row("Data folder", _dataDir),
-            Note("The data folder holds the HTTPS certificate and the temporary CSV files of exports.")));
+            Row("Program folder", _installDir), Row("Data folder", _dataDir, browse: true), Row("Export work folder", _workDir, browse: true),
+            Note(@"The data folder holds the HTTPS certificate. The export work folder holds the temporary export files (and the optional local archive): " +
+                 @"choose a fast local disk with room for the largest tables of one night, e.g. E:\SqlHarbor\work.")));
         _pages.Add(Page("Summary", _summary));
         _pages.Add(Page("Installing", _progress));
         var finish = Page("Finished", _finish);
@@ -97,8 +103,10 @@ internal sealed class WizardForm : Form
         _back.Click += (_, _) => Show(_page - 1);
         _next.Click += async (_, _) => await NextAsync();
         _cancel.Click += (_, _) => Close();
+        foreach (var p in _pages) { p.Visible = false; _body.Controls.Add(p); }
         UpdateEnabled();
         Show(0);
+        ResumeLayout(true);
     }
 
     private void UpdateEnabled()
@@ -111,8 +119,7 @@ internal sealed class WizardForm : Form
     private void Show(int page)
     {
         _page = Math.Clamp(page, 0, _pages.Count - 1);
-        _body.Controls.Clear();
-        _body.Controls.Add(_pages[_page]);
+        for (var i = 0; i < _pages.Count; i++) _pages[i].Visible = i == _page;
         _title.Text = _pages[_page].Tag as string;
         _back.Enabled = _page is > 0 and < 5;
         _next.Text = _page switch { 4 => "Install", 6 => "Finish", _ => "Next >" };
@@ -128,7 +135,7 @@ internal sealed class WizardForm : Form
             Collect();
             var problems = _o.Validate().Where(p => PageOf(p) <= _page).ToList();
             if (problems.Count > 0) { MessageBox.Show(string.Join(Environment.NewLine, problems), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            if (_page == 3) _summary.Text = Summary();
+            if (_page == 3) _summary.Text = Summary().ReplaceLineEndings("\r\n");   // a TextBox breaks lines only at CRLF
             Show(_page + 1);
             return;
         }
@@ -180,6 +187,7 @@ internal sealed class WizardForm : Form
         _o.SecretKey = string.IsNullOrWhiteSpace(_secretKey.Text) ? null : _secretKey.Text.Trim();
         _o.HostName = _host.Text.Trim(); _o.HttpsPort = (int)_port.Value; _o.OpenFirewall = _firewall.Checked;
         _o.InstallDir = _installDir.Text.Trim(); _o.DataDir = _dataDir.Text.Trim();
+        _o.WorkDir = string.IsNullOrWhiteSpace(_workDir.Text) ? null : _workDir.Text.Trim();
     }
 
     /// <summary>On which page a validation message belongs (messages of later pages are shown when that page is left).</summary>
@@ -201,6 +209,7 @@ internal sealed class WizardForm : Form
         Web:               {(_o.InstallsWeb ? $"{_o.Url} (self-signed certificate{(_o.OpenFirewall ? ", firewall rule" : "")})" : "not on this server")}
         Program folder:    {_o.InstallDir}
         Data folder:       {_o.DataDir}
+        Export folder:     {_o.ExportDir}
         Service:           {_o.ServiceName} (automatic, delayed start; restarts on failure)
         """;
 
@@ -218,11 +227,22 @@ internal sealed class WizardForm : Form
         return flow;
     }
 
-    private static Control Row(string label, Control input)
+    private static Control Row(string label, Control input, bool browse = false)
     {
         var p = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = Padding.Empty };
         p.Controls.Add(new Label { Text = label, Width = 150, TextAlign = ContentAlignment.MiddleLeft, Height = 24 });
         p.Controls.Add(input);
+        if (browse && input is TextBox box)
+        {
+            var b = new Button { Text = "...", Width = 32, Height = 24 };
+            b.Click += (_, _) =>
+            {
+                using var dlg = new FolderBrowserDialog { Description = label, UseDescriptionForTitle = true, ShowNewFolderButton = true };
+                if (Directory.Exists(box.Text.Trim())) dlg.InitialDirectory = box.Text.Trim();
+                if (dlg.ShowDialog() == DialogResult.OK) box.Text = dlg.SelectedPath;
+            };
+            p.Controls.Add(b);
+        }
         return p;
     }
 

@@ -579,11 +579,14 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
                 <li><b>Databases</b>: <i>create now</i> with the installing user's Windows account (databases, etl schema, permissions, export reader), or <i>later</i>:
                     the scripts are written to <code>&lt;program folder&gt;\sql</code> for the DBA. Central Hangfire: <code>03_hangfire_central.sql</code> is always for the DBA.
                     Until the metadata database is ready the application shows a <i>setup required</i> page and restarts itself as soon as it is.</li>
-                <li><b>Web</b>: host name and HTTPS port, self-signed certificate, firewall rule; program and data folder (certificate, temporary CSV files).</li>
+                <li><b>Web</b>: host name and HTTPS port, self-signed certificate, firewall rule; program and data folder (certificate) and the <b>export work folder</b>
+                    (<code>Collector:WorkDirectory</code>: temporary export files and the optional local archive; empty = <code>&lt;data folder&gt;\exports</code>).
+                    Choose a fast local disk other than C: with room for the largest tables of one night; network shares are refused. An upgrade keeps the folder in use –
+                    to move it later, change <code>Collector:WorkDirectory</code> in <code>appsettings.Production.json</code> and restart the service.</li>
                 <li>The service starts; <i>Open SqlHarbor</i> opens <code>https://localhost/login</code> for the first sign-in.</li>
             </ol>
             <p>Silent: <code>SqlHarbor-Setup.exe /silent /config install.json /password-env SDC_PWD [/log file] [/dryrun]</code>. Uninstall: Apps &amp; features,
-               or <code>/uninstall [/purge]</code> (databases and, without /purge, the data folder are kept). Running the setup again upgrades the binaries and keeps the configuration.</p>
+               or <code>/uninstall [/purge]</code> (databases and, without /purge, the data and export folders are kept). The silent JSON sets the export folder with <code>"WorkDir"</code>. Running the setup again upgrades the binaries and keeps the configuration.</p>
         </section>
 
         <section id="alerts">

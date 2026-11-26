@@ -480,6 +480,10 @@ SqlDataCollector.exe jobs-import jobs.json [--update-existing] [--keep-active] [
         <li><b>Servis hesabı:</b> domain hesabı veya gMSA; sihirbaz doğrular ve gerekli Windows hakkını verir.</li>
         <li><b>Veritabanları:</b> hemen oluşturulabilir ya da betikler DBA için klasöre yazılır.</li>
         <li><b>Web:</b> sunucu adı, HTTPS portu ve güvenlik duvarı kuralı.</li>
+        <li><b>Export work folder:</b> export dosyalarının geçici olarak yazıldığı klasör (boş bırakılırsa veri klasörünün altındaki <code>exports</code>).
+            C: dışında hızlı bir yerel disk seçin, örneğin <code>E:\SqlHarbor\work</code>; bir gecenin en büyük tablolarına yetecek yer olmalı. Ağ paylaşımı kabul edilmez.
+            Servis hesabına yazma yetkisini kurulum verir. Sonradan taşımak için <code>appsettings.Production.json</code> içindeki <code>Collector:WorkDirectory</code>
+            değiştirilip servis yeniden başlatılır; güncelleme kurulumu kullanılan klasörü korur.</li>
         <li>Kurulum bitince <b>Open SqlHarbor</b> ile ilk giriş ekranı açılır.</li>
     </ol>
     <p>Kurulumu yeniden çalıştırmak uygulamayı günceller; ayarlar korunur.</p>

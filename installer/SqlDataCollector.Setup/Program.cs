@@ -73,6 +73,7 @@ internal static class Program
         if (key?.GetValue("InstallLocation") is string dir) o.InstallDir = dir;
         if (key?.GetValue("ServiceName") is string svc) o.ServiceName = svc;
         if (key?.GetValue("DataDir") is string data) o.DataDir = data;
+        if (key?.GetValue("ExportDir") is string export) o.WorkDir = export;
         return o;
     }
 }

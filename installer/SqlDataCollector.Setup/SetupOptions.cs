@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -15,6 +16,12 @@ public sealed partial class SetupOptions
     public string InstallDir { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "SqlDataCollector");
     public string DataDir { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SqlDataCollector");
     public string ServiceName { get; set; } = "SqlDataCollector";
+
+    /// <summary>
+    /// Export work folder (Collector:WorkDirectory): temporary export files and the optional local .csv.gz archive.
+    /// Empty = &lt;DataDir&gt;\exports. Best on a fast local disk other than C:.
+    /// </summary>
+    public string? WorkDir { get; set; }
 
     /// <summary>DOMAIN\user or DOMAIN\gmsa$.</summary>
     public string ServiceAccount { get; set; } = "";
@@ -51,7 +58,9 @@ public sealed partial class SetupOptions
     public string AppDir => Path.Combine(InstallDir, "app");
     public string ScriptsDir => Path.Combine(InstallDir, "sql");
     public string CertDir => Path.Combine(DataDir, "certs");
-    public string ExportDir => Path.Combine(DataDir, "exports");
+    public string ExportDir => string.IsNullOrWhiteSpace(WorkDir) ? Path.Combine(DataDir, "exports") : WorkDir.Trim();
+    /// <summary>The export folder is not inside the data folder: it needs its own permission and is purged separately.</summary>
+    public bool ExportDirOutsideData => !IsInside(ExportDir, DataDir);
     public string Url => HttpsPort == 443 ? $"https://{HostName}" : $"https://{HostName}:{HttpsPort}";
     public string LocalUrl => HttpsPort == 443 ? "https://localhost" : $"https://localhost:{HttpsPort}";
 
@@ -81,7 +90,34 @@ public sealed partial class SetupOptions
             catch (FormatException) { e.Add("The secret key is not valid base64."); }
         }
         if (string.IsNullOrWhiteSpace(InstallDir) || string.IsNullOrWhiteSpace(DataDir)) e.Add("Enter the installation and data folders.");
+        if (!string.IsNullOrWhiteSpace(WorkDir) && WorkDirProblem(WorkDir.Trim()) is { } w) e.Add(w);
         return e;
+    }
+
+    /// <summary>Why a folder cannot be the export work folder (null = fine): it must be a full local path.</summary>
+    public static string? WorkDirProblem(string dir) =>
+        dir.StartsWith(@"\\", StringComparison.Ordinal) || dir.StartsWith("//", StringComparison.Ordinal)
+            ? @"The export work folder must be on a local disk, not a network share (\\server\share)."
+            : !Path.IsPathFullyQualified(dir) || dir.IndexOfAny(Path.GetInvalidPathChars()) >= 0
+                ? @"The export work folder must be a full path such as E:\SqlHarbor\work."
+                : null;
+
+    /// <summary>True when <paramref name="path"/> is <paramref name="folder"/> or below it.</summary>
+    public static bool IsInside(string path, string folder)
+    {
+        static string Norm(string p) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)) + Path.DirectorySeparatorChar;
+        return Norm(path).StartsWith(Norm(folder), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Collector:WorkDirectory of an existing appsettings.Production.json (an upgrade keeps the folder in use); null = not set.</summary>
+    public static string? WorkDirectoryOf(string configJson)
+    {
+        try
+        {
+            var node = JsonNode.Parse(configJson, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            return node?["Collector"]?["WorkDirectory"] is JsonValue v && v.TryGetValue<string>(out var dir) && !string.IsNullOrWhiteSpace(dir) ? dir : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     private static string DomainSuffix()

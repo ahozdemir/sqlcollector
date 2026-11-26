@@ -28,6 +28,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- the installer is a WinForms exe (net10.0-windows): its options class has no UI dependencies and is tested by linking it -->
+    <Compile Include="..\..\installer\SqlDataCollector.Setup\SetupOptions.cs" Link="Installer\SetupOptions.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\SqlDataCollector\SqlDataCollector.csproj" />
     <ProjectReference Include="..\..\src\SqlDataCollector.Core\SqlDataCollector.Core.csproj" />
   </ItemGroup>

@@ -32,6 +32,12 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
 
         var upgrade = Native.ServiceExists(o.ServiceName) && File.Exists(ConfigFile);
         if (upgrade) Info($"An existing installation was found ({o.ServiceName}): binaries are replaced, its configuration and certificate are kept.");
+        if (upgrade && SetupOptions.WorkDirectoryOf(File.ReadAllText(ConfigFile)) is { } inUse)
+        {
+            if (!string.IsNullOrWhiteSpace(o.WorkDir) && !string.Equals(Path.GetFullPath(o.WorkDir.Trim()), Path.GetFullPath(inUse), StringComparison.OrdinalIgnoreCase))
+                Warn($"The export work folder stays {inUse} (the configuration is kept); to move it, change Collector:WorkDirectory in {ConfigFile} and restart the service.");
+            o.WorkDir = inUse;
+        }
 
         Step("Stopping the existing service");
         if (Native.ServiceExists(o.ServiceName)) await StopServiceAsync(ct);
@@ -40,7 +46,7 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
         Step($"Copying the application to {o.AppDir}");
         ExtractPayload(upgrade);
 
-        Step($"Preparing the data folder {o.DataDir}");
+        Step($"Preparing the data folder {o.DataDir}" + (o.ExportDirOutsideData ? $" and the export work folder {o.ExportDir}" : ""));
         PrepareFolders();
 
         if (!upgrade)
@@ -118,8 +124,12 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
         await RunAsync(ct, ignoreExitCode: true, "netsh.exe", "advfirewall", "firewall", "delete", "rule", $"name={FirewallRule}");
         Step($"Removing {o.AppDir}");
         Do(() => { if (Directory.Exists(o.AppDir)) Directory.Delete(o.AppDir, true); }, $"would delete {o.AppDir}");
-        if (purgeData) Do(() => { if (Directory.Exists(o.DataDir)) Directory.Delete(o.DataDir, true); }, $"would delete {o.DataDir}");
-        else Info($"Kept: {o.DataDir} (certificate, export archive) and the databases.");
+        if (purgeData)
+        {
+            Do(() => { if (Directory.Exists(o.DataDir)) Directory.Delete(o.DataDir, true); }, $"would delete {o.DataDir}");
+            if (o.ExportDirOutsideData) Do(() => { if (Directory.Exists(o.ExportDir)) Directory.Delete(o.ExportDir, true); }, $"would delete {o.ExportDir}");
+        }
+        else Info($"Kept: {o.DataDir} (certificate){(o.ExportDirOutsideData ? $", {o.ExportDir}" : "")} (export archive) and the databases.");
         Do(() => Registry.LocalMachine.DeleteSubKeyTree(UninstallKey, false), "would remove the uninstall entry");
         Info("SqlDataCollector was removed.");
     }
@@ -179,6 +189,7 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
             var account = Native.ResolveAccount(o.ServiceAccount);
             // data folder: the service account may write; the certificate folder: only SYSTEM, Administrators and the service account
             Grant(new DirectoryInfo(o.DataDir), account, FileSystemRights.Modify);
+            if (o.ExportDirOutsideData) Grant(new DirectoryInfo(o.ExportDir), account, FileSystemRights.Modify);
             var certs = new DirectoryInfo(o.CertDir);
             var acl = new DirectorySecurity();
             acl.SetAccessRuleProtection(true, false);
@@ -186,7 +197,7 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
                 acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
             acl.AddAccessRule(new FileSystemAccessRule(account, FileSystemRights.Modify, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
             certs.SetAccessControl(acl);
-        }, $"would create {o.DataDir} (exports, certs) and grant {o.ServiceAccount} access");
+        }, $"would create {o.DataDir} (certs), the export work folder {o.ExportDir} and grant {o.ServiceAccount} access");
     }
 
     private static void Grant(DirectoryInfo dir, SecurityIdentifier sid, FileSystemRights rights)
@@ -284,6 +295,7 @@ public sealed class Engine(SetupOptions o, Action<string> log, bool dryRun, stri
             key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
             key.SetValue("ServiceName", o.ServiceName);
             key.SetValue("DataDir", o.DataDir);
+            key.SetValue("ExportDir", o.ExportDir);
         }, $"would register the uninstaller ({setupExe} /uninstall)");
     }
 
